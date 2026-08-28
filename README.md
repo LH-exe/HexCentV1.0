@@ -1,4 +1,4 @@
-# HEXCENT // Personal Engineering Platform & Command Center
+# HEXCENT // Personal Projects & Control Panel
 
 <p align="center">
   <img src="https://img.shields.io/badge/Framework-Next.js%2015-00f0ff?style=flat-square&logo=nextdotjs&logoColor=black" alt="Next.js" />
