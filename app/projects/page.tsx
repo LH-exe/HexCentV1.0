@@ -32,6 +32,8 @@ export default function ProjectsIndex() {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Project & { dualColors: string }>>({});
+  // Raw string draft for tags — prevents immediate split/join thrash and cursor jumps (see fix for blocked comma input)
+  const [rawTags, setRawTags] = useState<string>("");
 
   useEffect(() => {
     router.refresh();
@@ -61,6 +63,20 @@ export default function ProjectsIndex() {
   async function startEdit(p: Project) {
     setEditingId(p.id);
     setEditForm({ ...p, dualColors: `${p.titleColor}, ${p.summaryColor}` });
+    // Initialize raw string buffer from stored tags (JSON array string or raw string) — allows freeform typing without thrash
+    let initialTags = "";
+    if (typeof p.tags === "string") {
+      try {
+        const parsed = JSON.parse(p.tags);
+        if (Array.isArray(parsed)) initialTags = parsed.join(", ");
+        else initialTags = p.tags;
+      } catch {
+        initialTags = p.tags;
+      }
+    } else if (Array.isArray(p.tags as unknown as string[])) {
+      initialTags = (p.tags as unknown as string[]).join(", ");
+    }
+    setRawTags(initialTags);
   }
   async function saveEdit() {
     if (!editingId || !editForm) return;
@@ -73,14 +89,15 @@ export default function ProjectsIndex() {
       if (parts[0]) payload.titleColor = parts[0];
       if (parts[1]) payload.summaryColor = parts[1];
     }
-    if (editForm.tags !== undefined) {
-      const t = editForm.tags as string;
-      payload.tags = t.trim().startsWith("[") ? t : JSON.stringify(t.split(",").map(s=>s.trim()).filter(Boolean));
+    // Use rawTags draft — parse only on save (blur/save) to avoid per-keystroke split/join thrash
+    {
+      const splitTags = rawTags.split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+      payload.tags = JSON.stringify(splitTags);
     }
     if (editForm.isPublic !== undefined) payload.isPublic = editForm.isPublic;
     const res = await fetch(`/api/projects/${editingId}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (res.ok) { setProjects(prev=> prev.map(x=> x.id===editingId ? data.project : x)); setEditingId(null); }
+    if (res.ok) { setProjects(prev=> prev.map(x=> x.id===editingId ? data.project : x)); setEditingId(null); setRawTags(""); }
   }
 
   async function toggleVisible(p: Project) {
@@ -113,7 +130,7 @@ export default function ProjectsIndex() {
                     {isEditing ? (
                       <>
                         <button onClick={saveEdit} className="border border-accent-cyan/30 bg-accent-cyan p-1 text-dark-900"><Save className="h-3 w-3" /></button>
-                        <button onClick={()=> setEditingId(null)} className="border border-border-dark bg-dark-900 p-1 text-slate-400"><X className="h-3 w-3" /></button>
+                        <button onClick={()=> { setEditingId(null); setRawTags(""); }} className="border border-border-dark bg-dark-900 p-1 text-slate-400"><X className="h-3 w-3" /></button>
                       </>
                     ) : (
                       <>
@@ -126,16 +143,69 @@ export default function ProjectsIndex() {
                 )}
 
                 {isEditing ? (
-                  <div className="p-4 space-y-2">
-                    <input value={editForm.title as string ?? ""} onChange={e=> setEditForm({...editForm, title: e.target.value})} placeholder="Title" className="w-full border border-border-dark bg-dark-900 px-2 py-1.5 text-sm text-white" />
+                  <div className="p-4 space-y-2" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+                    <input
+                      value={editForm.title as string ?? ""}
+                      onChange={e=> setEditForm({...editForm, title: e.target.value})}
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Title"
+                      className="w-full border border-border-dark bg-dark-900 px-2 py-1.5 text-sm text-white focus:border-cyan-400 focus:outline-none"
+                    />
                     <div className="grid grid-cols-2 gap-2">
-                      <select value={editForm.icon as string ?? p.icon} onChange={e=> setEditForm({...editForm, icon: e.target.value})} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                      <select
+                        value={editForm.icon as string ?? p.icon}
+                        onChange={e=> setEditForm({...editForm, icon: e.target.value})}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                      >
                         {iconOptions.map(o=> <option key={o} value={o}>{o}</option>)}
                       </select>
-                      <input value={editForm.iconColor as string ?? ""} onChange={e=> setEditForm({...editForm, iconColor: e.target.value})} placeholder="Gradient" className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white" />
+                      <input
+                        value={editForm.iconColor as string ?? ""}
+                        onChange={e=> setEditForm({...editForm, iconColor: e.target.value})}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        placeholder="Gradient"
+                        className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                      />
                     </div>
-                    <input value={(editForm as { dualColors?: string }).dualColors ?? ""} onChange={e=> setEditForm({...editForm, dualColors: e.target.value})} placeholder="#ffffff, #94a3b8" className="w-full border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white" />
-                    <input value={Array.isArray(parseTags(editForm.tags as string ?? p.tags)) ? parseTags(editForm.tags as string ?? p.tags).join(", ") : editForm.tags as string} onChange={e=> setEditForm({...editForm, tags: e.target.value})} placeholder="Tags comma separated (unlimited)" className="w-full border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white" />
+                    <input
+                      value={(editForm as { dualColors?: string }).dualColors ?? ""}
+                      onChange={e=> setEditForm({...editForm, dualColors: e.target.value})}
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="#ffffff, #94a3b8"
+                      className="w-full border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                    />
+                    <div className="flex flex-col gap-1 w-full">
+                      <label className="text-[10px] uppercase font-mono tracking-wider text-slate-400">
+                        Tags (comma separated, unlimited)
+                      </label>
+                      <input
+                        type="text"
+                        value={rawTags}
+                        onChange={(e) => {
+                          setRawTags(e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                        }}
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                        }}
+                        placeholder="TypeScript, Python, PyQt6, Next.js"
+                        className="w-full bg-dark-900 border border-border-dark px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:border-cyan-400 focus:outline-none rounded-none"
+                      />
+                    </div>
                   </div>
                 ) : (
                   <Link href={`/projects/${p.slug}`} className="flex-1 p-5 flex flex-col">

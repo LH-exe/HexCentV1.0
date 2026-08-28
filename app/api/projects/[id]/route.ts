@@ -42,7 +42,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (body.slug !== undefined) updateData.slug = String(body.slug).trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-");
 
     if (body.tags !== undefined) {
-      updateData.tags = typeof body.tags === "string" ? body.tags : JSON.stringify(body.tags);
+      if (Array.isArray(body.tags)) {
+        updateData.tags = JSON.stringify(body.tags);
+      } else if (typeof body.tags === "string") {
+        // If it's already a JSON array string or raw comma-separated string
+        try {
+          const parsed = JSON.parse(body.tags);
+          updateData.tags = Array.isArray(parsed) ? JSON.stringify(parsed) : JSON.stringify([body.tags]);
+        } catch {
+          const splitTags = body.tags.split(",").map((t: string) => t.trim()).filter(Boolean);
+          updateData.tags = JSON.stringify(splitTags);
+        }
+      } else {
+        updateData.tags = JSON.stringify(body.tags);
+      }
     }
 
     // Strict AST Content Serialization Guard
