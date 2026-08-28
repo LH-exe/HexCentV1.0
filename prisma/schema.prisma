@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String          @id @default(cuid())
+  role           String          @default("GUEST")
+  createdAt      DateTime        @default(now())
+  documents      Document[]
+  folders        Folder[]
+  tasks          Task[]
+  workspaceCards WorkspaceCard[]
+}
+
+model Folder {
+  id        String     @id @default(cuid())
+  name      String     @default("Untitled Folder")
+  color     String     @default("#00f0ff")
+  parentId  String?
+  parent    Folder?    @relation("FolderToFolder", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[]   @relation("FolderToFolder")
+  documents Document[]
+  userId    String?
+  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@index([parentId])
+  @@index([userId])
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String   @default("Untitled Document")
+  content   String   @default("[]") // JSON AST string of rich blocks & formatting
+  icon      String?  @default("FileText")
+  folderId  String?
+  folder    Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([folderId])
+  @@index([userId])
+}
+
+model Project {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  title        String   @default("New Project")
+  description  String   @default("Project summary...")
+  icon         String   @default("Folder")
+  iconColor    String   @default("linear-gradient(135deg, #00f0ff, #4338ca)")
+  titleColor   String   @default("#ffffff")
+  summaryColor String   @default("#94a3b8")
+  status       String   @default("In Development")
+  tags         String   @default("[]")
+  content      String   @default("[]")
+  isPublic     Boolean  @default(true)
+  order        Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model WorkspaceCard {
+  id           String   @id @default(cuid())
+  title        String   @default("Untitled Card")
+  description  String   @default("Private notes & specs...")
+  icon         String   @default("FileText")
+  iconColor    String   @default("linear-gradient(135deg, #00f0ff, #4338ca)")
+  titleColor   String   @default("#ffffff")
+  summaryColor String   @default("#94a3b8")
+  status       String   @default("Concept")
+  tags         String   @default("[]")
+  content      String   @default("[]")
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  title     String
+  completed Boolean  @default(false)
+  priority  String   @default("NORMAL")
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model PageLayout {
+  id         String   @id @default(cuid())
+  pageKey    String   @unique
+  layoutJson String   @default("[]")
+  updatedAt  DateTime @updatedAt
+}

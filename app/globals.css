@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-900: #020406;
+  --bg-800: #070b11;
+  --bg-700: #0a0f18;
+  --border-dark: #1e293b;
+  --border-light: #334155;
+  --cyan: #00f0ff;
+  --green: #00ff66;
+  --red: #ff3366;
+  --slate: #cbd5e1;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1e293b #020406;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: #020406;
+}
+*::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 0;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg-900);
+  color: var(--slate);
+  font-family: 'Fira Code', 'Geist Mono', ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  15%, 45%, 75% { transform: translateX(-4px); }
+  30%, 60%, 90% { transform: translateX(4px); }
+}
+.animate-shake {
+  animation: shake 0.5s ease;
+}
+
+/* Global page fade-in */
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.page-fade-in {
+  animation: pageFadeIn 0.45s ease-out both;
+}
+.fade-in-delayed {
+  animation: pageFadeIn 0.6s ease-out 0.8s both;
+}
+
+/* Icon micro-gradients — SVG gradient definitions are inlined via <linearGradient> in components, utility classes for backgrounds */
+.icon-grad-cpu {
+  background: linear-gradient(135deg, #00f0ff 0%, #4338ca 100%);
+}
+.icon-grad-shield {
+  background: linear-gradient(135deg, #10b981 0%, #0e7490 100%);
+}
+.icon-grad-telemetry {
+  background: linear-gradient(135deg, #00f0ff 0%, #2563eb 100%);
+}
+.icon-grad-docs {
+  background: linear-gradient(135deg, #a855f7 0%, #475569 100%);
+}
+.icon-grad-cpu-text {
+  background: linear-gradient(135deg, #00f0ff 0%, #4338ca 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow micro accent */
+.glow-cyan {
+  box-shadow: 0 0 12px rgba(0,240,255,0.18), 0 0 28px rgba(0,240,255,0.08);
+}
+.glow-green {
+  box-shadow: 0 0 10px rgba(16,185,129,0.2);
+}
+
+/* Preserve sharp corners but allow opt-in radius via unforced classes — no global !important */
