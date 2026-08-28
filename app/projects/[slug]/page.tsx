@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useDebouncedSave } from "@/lib/hooks/useDebouncedSave";
 import { ArrowLeft, Plus, Trash2, Copy, Check, LayoutGrid, Loader2, Cpu, Activity, Shield, Terminal, Database, Zap, Code, Folder, LineChart, FileText, Layers, Lock, type LucideIcon } from "lucide-react";
@@ -130,27 +130,100 @@ export default function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [draggedBlock, setDraggedBlock] = useState<string | null>(null);
 
+  // Fast metadata status (optimistic, 300ms micro-debounce)
+  const [metaStatus, setMetaStatus] = useState<"idle" | "syncing" | "saved" | "error">("idle");
+  const metaTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" }).then(r=>r.json()).then(d=> { if(d.role==="ADMIN") setIsAdmin(true); }).catch(()=>{});
   }, []);
 
-  const savePayload = { title, description, icon: project?.icon, iconColor: project?.iconColor, titleColor: (project as unknown as { titleColor: string })?.titleColor, summaryColor: (project as unknown as { summaryColor: string })?.summaryColor, status, tags: JSON.stringify(tagsStr.split(",").map(s=>s.trim()).filter(Boolean)), content: JSON.stringify(blocks) };
+  // Fast save for metadata (Status, Icon, Colors, Description, Tags, Title) — decoupled from heavy block debounce
+  const saveMetadataImmediate = useCallback(
+    async (patchPayload: Partial<Project>) => {
+      if (!project?.id && !slug) return;
+      const targetId = project?.id || slug;
 
-  const doSave = useCallback(async (payload: typeof savePayload) => {
-    const targetId = project?.id || slug;
-    if (!targetId) return;
-    const res = await fetch(`/api/projects/${targetId}`, { method: "PATCH", headers: { "Content-Type":"application/json"}, body: JSON.stringify(payload) });
-    if (!res.ok) throw new Error("Failed to save project content");
-  }, [project?.id, slug]);
+      // Optimistic UI update
+      setProject((prev) => (prev ? { ...prev, ...patchPayload } : prev));
+      // Keep local states in sync for controlled inputs
+      if (patchPayload.status !== undefined) setStatus(String(patchPayload.status));
+      if (patchPayload.title !== undefined) setTitle(String(patchPayload.title));
+      if (patchPayload.description !== undefined) setDescription(String(patchPayload.description));
+      if (patchPayload.tags !== undefined) {
+        try {
+          const arr = JSON.parse(String(patchPayload.tags));
+          if (Array.isArray(arr)) setTagsStr(arr.join(", "));
+        } catch {}
+      }
 
-  const { status: saveStatus, resetBaseline } = useDebouncedSave(savePayload, doSave, 1500, !!project && isAdmin);
+      setMetaStatus("syncing");
+      try {
+        const res = await fetch(`/api/projects/${targetId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patchPayload),
+        });
+        if (!res.ok) throw new Error("Failed to save metadata");
+        const data = await res.json().catch(()=> ({}));
+        if (data.project) setProject(data.project);
+        else if (data.ok && data.project) setProject(data.project);
+        setMetaStatus("saved");
+        setTimeout(() => {
+          setMetaStatus((prev) => (prev === "saved" ? "idle" : prev));
+        }, 2000);
+      } catch (err) {
+        console.error("[saveMetadataImmediate] Failed:", err);
+        setMetaStatus("error");
+      }
+    },
+    [project?.id, slug]
+  );
+
+  // 300ms micro-debounce wrapper for text fields (title, description) to avoid per-keystroke flood
+  const debouncedMetaSave = useCallback(
+    (patch: Partial<Project>) => {
+      if (metaTimeoutRef.current) clearTimeout(metaTimeoutRef.current);
+      metaTimeoutRef.current = setTimeout(() => {
+        saveMetadataImmediate(patch);
+      }, 300);
+    },
+    [saveMetadataImmediate]
+  );
+
+  // Heavy content save — debounced 1500ms, only blocks (decoupled)
+  const saveBlocks = useCallback(
+    async (updatedBlocks: Block[]) => {
+      if (!project?.id && !slug) return;
+      const targetId = project?.id || slug;
+      const res = await fetch(`/api/projects/${targetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: JSON.stringify(updatedBlocks) }),
+      });
+      if (!res.ok) throw new Error("Failed to save project content");
+    },
+    [project?.id, slug]
+  );
+
+  const { status: contentSaveStatus, resetBaseline: resetContentBaseline } = useDebouncedSave(blocks, saveBlocks, 1500, !!project && isAdmin);
+
+  // Combined display status: metadata fast + content heavy
+  const saveStatus: "idle" | "syncing" | "saved" | "error" =
+    metaStatus === "syncing" || contentSaveStatus === "syncing"
+      ? "syncing"
+      : metaStatus === "error" || contentSaveStatus === "error"
+        ? "error"
+        : metaStatus === "saved" || contentSaveStatus === "saved"
+          ? "saved"
+          : "idle";
 
   useEffect(() => {
     let isMounted = true;
     async function load() {
       setLoading(true);
       try {
-        // try fetch by id/slug via projects list fallback
+        // try fetch by id/slug via projects list fallback (cached edge, cheap)
         const res = await fetch("/api/projects", { cache: "no-store" });
         const data = await res.json();
         const found = (data.projects ?? []).find((p: Project) => p.slug === slug || p.id === slug);
@@ -163,26 +236,8 @@ export default function ProjectPage() {
           try { const t = JSON.parse(found.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch { setTagsStr(""); }
           const parsed = parseContent(found.content);
           setBlocks(parsed);
-          // Reset debounced baseline to prevent false-dirty on hydration
-          const freshPayload = {
-            title: found.title,
-            description: found.description ?? "",
-            icon: found.icon,
-            iconColor: found.iconColor,
-            titleColor: (found as any).titleColor,
-            summaryColor: (found as any).summaryColor,
-            status: found.status,
-            tags: found.tags,
-            content: JSON.stringify(parsed),
-          };
-          // Normalize tags to payload format for snapshot consistency
-          try {
-            const tagArr = JSON.parse(found.tags);
-            freshPayload.tags = JSON.stringify(Array.isArray(tagArr) ? tagArr : []);
-          } catch {
-            freshPayload.tags = JSON.stringify([]);
-          }
-          resetBaseline(freshPayload as typeof savePayload);
+          resetContentBaseline(parsed);
+          setMetaStatus("idle");
         } else {
           const r2 = await fetch(`/api/projects/${slug}`, { cache: "no-store" });
           if (r2.ok) {
@@ -195,24 +250,8 @@ export default function ProjectPage() {
               const parsed = parseContent(d2.project.content);
               setBlocks(parsed);
               try { const t = JSON.parse(d2.project.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch { setTagsStr(""); }
-              const freshPayload = {
-                title: d2.project.title,
-                description: d2.project.description ?? "",
-                icon: d2.project.icon,
-                iconColor: d2.project.iconColor,
-                titleColor: (d2.project as any).titleColor,
-                summaryColor: (d2.project as any).summaryColor,
-                status: d2.project.status,
-                tags: d2.project.tags,
-                content: JSON.stringify(parsed),
-              };
-              try {
-                const tagArr = JSON.parse(d2.project.tags);
-                freshPayload.tags = JSON.stringify(Array.isArray(tagArr) ? tagArr : []);
-              } catch {
-                freshPayload.tags = JSON.stringify([]);
-              }
-              resetBaseline(freshPayload as typeof savePayload);
+              resetContentBaseline(parsed);
+              setMetaStatus("idle");
             }
           }
         }
@@ -224,7 +263,7 @@ export default function ProjectPage() {
     }
     load();
     return () => { isMounted = false; };
-  }, [slug, resetBaseline]);
+  }, [slug, resetContentBaseline]);
 
   function updateBlock(id: string, patch: Partial<Block>) { setBlocks(prev=> prev.map(b=> b.id===id ? { ...b, ...patch } as Block : b)); }
   function addBlock(type: Block["type"] = "paragraph") {
@@ -269,32 +308,75 @@ export default function ProjectPage() {
             {isReadOnly ? (
               <h1 className="text-xl font-bold" style={{ color: (project as unknown as { titleColor: string }).titleColor ?? "#ffffff" }}>{project.title}</h1>
             ) : (
-              <input value={title} onChange={e=> setTitle(e.target.value)} className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1" />
+              <input
+                value={title}
+                onChange={e=> setTitle(e.target.value)}
+                onBlur={e=> saveMetadataImmediate({ title: e.target.value })}
+                className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1"
+              />
             )}
             <div className="mt-2 flex flex-wrap gap-2 items-center">
               {isReadOnly ? (
                 <span className={`border px-2 py-1 text-xs ${status==="Active" ? "bg-emerald-950/60 text-emerald-400 border-emerald-800" : status==="In Development" ? "bg-cyan-950/60 text-cyan-400 border-cyan-800" : status==="Concept" ? "bg-yellow-950/60 text-yellow-400 border-yellow-800" : "bg-orange-950/60 text-orange-400 border-orange-800"}`}>{status}</span>
               ) : (
-                <select value={status} onChange={e=> setStatus(e.target.value)} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                <select
+                  value={status}
+                  onChange={e=> {
+                    const newStatus = e.target.value;
+                    setStatus(newStatus);
+                    saveMetadataImmediate({ status: newStatus });
+                  }}
+                  className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
+                >
                   <option>Concept</option><option>In Development</option><option>Active</option><option>Archived</option>
                 </select>
               )}
               {isReadOnly ? (
                 <span className="text-xs text-slate-500">{tagsStr || (()=>{ try{ return JSON.parse(project.tags).join(", "); } catch{ return ""; }})()}</span>
               ) : (
-                <input value={tagsStr} onChange={e=> setTagsStr(e.target.value)} placeholder="Tags comma separated" className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white placeholder:text-slate-600" />
+                <input
+                  value={tagsStr}
+                  onChange={e=> setTagsStr(e.target.value)}
+                  onBlur={e=> {
+                    const arr = e.target.value.split(",").map(s=>s.trim()).filter(Boolean);
+                    saveMetadataImmediate({ tags: JSON.stringify(arr) });
+                  }}
+                  placeholder="Tags comma separated"
+                  className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white placeholder:text-slate-600"
+                />
               )}
             </div>
             {isReadOnly ? (
               <p className="mt-3 text-sm leading-relaxed" style={{ color: (project as unknown as { summaryColor: string }).summaryColor ?? "#94a3b8" }}>{description || project.description}</p>
             ) : (
               <>
-                <textarea value={description} onChange={e=> setDescription(e.target.value)} rows={2} placeholder="Description" className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300" />
+                <textarea
+                  value={description}
+                  onChange={e=> setDescription(e.target.value)}
+                  onBlur={e=> saveMetadataImmediate({ description: e.target.value })}
+                  rows={2}
+                  placeholder="Description"
+                  className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300"
+                />
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <select value={project.icon} onChange={e=> setProject(prev=> prev ? { ...prev, icon: e.target.value } : prev)} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                  <select
+                    value={project.icon}
+                    onChange={e=> {
+                      const newIcon = e.target.value;
+                      setProject(prev=> prev ? { ...prev, icon: newIcon } : prev);
+                      saveMetadataImmediate({ icon: newIcon });
+                    }}
+                    className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
+                  >
                     {Object.keys(ICON_MAP).map(k=> <option key={k} value={k}>{k}</option>)}
                   </select>
-                  <input value={project.iconColor} onChange={e=> setProject(prev=> prev ? { ...prev, iconColor: e.target.value } : prev)} placeholder="linear-gradient(135deg, #00f0ff, #4338ca)" className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white" />
+                  <input
+                    value={project.iconColor}
+                    onChange={e=> setProject(prev=> prev ? { ...prev, iconColor: e.target.value } : prev)}
+                    onBlur={e=> saveMetadataImmediate({ iconColor: e.target.value })}
+                    placeholder="linear-gradient(135deg, #00f0ff, #4338ca)"
+                    className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
+                  />
                 </div>
               </>
             )}

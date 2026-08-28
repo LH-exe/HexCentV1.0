@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useDebouncedSave } from "@/lib/hooks/useDebouncedSave";
 import { cn } from "@/lib/utils";
 import {
@@ -222,6 +222,60 @@ export default function WorkspacePage() {
     await fetch(`/api/workspace-cards/${selectedCard.id}`, { method: "PATCH", headers: { "Content-Type":"application/json"}, body: JSON.stringify(payload) });
   }, [selectedCard]);
   const { status: cardSaveStatus, resetBaseline: resetCardBaseline } = useDebouncedSave({ content: serialize(cardBlocks) }, saveCardContent as unknown as (v: { content: string })=>Promise<void>, 1500, !!selectedCard);
+
+  // Unified card metadata save — fast 300ms micro-debounce via immediate optimistic + status sync
+  const [galleryMetaStatus, setGalleryMetaStatus] = useState<"idle" | "syncing" | "saved" | "error">("idle");
+  const galleryMetaTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const saveWorkspaceCardData = useCallback(
+    async (payload: Partial<WCard> & { content?: string }) => {
+      if (!selectedCard?.id) return;
+      const id = selectedCard.id;
+      setGalleryMetaStatus("syncing");
+      // Optimistic local update
+      setSelectedCard((prev) => (prev ? ({ ...prev, ...payload } as WCard) : prev));
+      setCards((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...payload } as WCard) : c)));
+      try {
+        const res = await fetch(`/api/workspace-cards/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error("Failed to update workspace card");
+        const data = await res.json().catch(() => ({}));
+        const updated = data.card ?? data.workspaceCard ?? data.project ?? null;
+        if (updated) {
+          setSelectedCard((prev) => (prev ? ({ ...prev, ...updated } as WCard) : prev));
+          setCards((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...updated } as WCard) : c)));
+        }
+        setGalleryMetaStatus("saved");
+        setTimeout(() => {
+          setGalleryMetaStatus((prev) => (prev === "saved" ? "idle" : prev));
+        }, 2000);
+      } catch (err) {
+        console.error("[saveWorkspaceCardData] Error:", err);
+        setGalleryMetaStatus("error");
+      }
+    },
+    [selectedCard?.id]
+  );
+
+  const debouncedCardMetaSave = useCallback(
+    (payload: Partial<WCard> & { content?: string }) => {
+      if (galleryMetaTimeoutRef.current) clearTimeout(galleryMetaTimeoutRef.current);
+      galleryMetaTimeoutRef.current = setTimeout(() => saveWorkspaceCardData(payload), 300);
+    },
+    [saveWorkspaceCardData]
+  );
+
+  const galleryDisplayStatus: "idle" | "syncing" | "saved" | "error" =
+    galleryMetaStatus === "syncing" || cardSaveStatus === "syncing"
+      ? "syncing"
+      : galleryMetaStatus === "error" || cardSaveStatus === "error"
+        ? "error"
+        : galleryMetaStatus === "saved" || cardSaveStatus === "saved"
+          ? "saved"
+          : "idle";
 
   // Fetch full document content on selection — resets debounced baseline to prevent hydration false-dirty
   useEffect(() => {
@@ -807,9 +861,10 @@ export default function WorkspacePage() {
             </div>
             {selectedCard && galleryEditMode && (
               <span className="flex items-center gap-1.5 text-[11px] tracking-widest shrink-0">
-                {cardSaveStatus==="syncing" && <span className="flex items-center gap-1 text-slate-400"><Loader2 className="h-3 w-3 animate-spin" /> Saving...</span>}
-                {cardSaveStatus==="saved" && <span className="flex items-center gap-1 text-slate-500"><Check className="h-3 w-3" /> Saved</span>}
-                {cardSaveStatus==="idle" && <span className="text-slate-600">Idle</span>}
+                {galleryDisplayStatus==="syncing" && <span className="flex items-center gap-1 text-cyan-300 border border-cyan-500/30 bg-cyan-950/40 px-2 py-1"><Loader2 className="h-3 w-3 animate-spin" /> Saving...</span>}
+                {galleryDisplayStatus==="saved" && <span className="flex items-center gap-1 text-emerald-400 border border-emerald-500/30 bg-emerald-950/40 px-2 py-1"><Check className="h-3 w-3" /> Saved</span>}
+                {galleryDisplayStatus==="error" && <span className="flex items-center gap-1 text-red-400 border border-red-500/30 bg-red-950/40 px-2 py-1">✕ Error</span>}
+                {galleryDisplayStatus==="idle" && <span className="flex items-center gap-1 text-slate-600 border border-border-dark bg-dark-900 px-2 py-1">● Ready</span>}
               </span>
             )}
           </div>
@@ -856,30 +911,66 @@ export default function WorkspacePage() {
                     </div>
                     <div className="flex-1">
                       {galleryEditMode ? (
-                        <input value={selectedCard?.title ?? ""} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, title: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ title: current.title }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1" />
+                        <input
+                          value={selectedCard?.title ?? ""}
+                          onChange={e=> { if (!selectedCard) return; const v=e.target.value; setSelectedCard({ ...selectedCard, title: v }); }}
+                          onBlur={e=> saveWorkspaceCardData({ title: e.target.value })}
+                          className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1"
+                        />
                       ) : (
                         <h1 className="text-xl font-bold" style={{ color: selectedCard?.titleColor ?? "#ffffff" }}>{selectedCard?.title ?? ""}</h1>
                       )}
                       <div className="mt-2 flex flex-wrap gap-2 items-center">
                         <span className={`border px-2 py-1 text-xs ${statusBadgeClass(selectedCard?.status ?? "Concept")}`}>{selectedCard?.status ?? "Concept"}</span>
                         {galleryEditMode && (
-                          <select value={selectedCard?.status ?? "Concept"} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, status: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ status: current.status }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                          <select
+                            value={selectedCard?.status ?? "Concept"}
+                            onChange={e=> {
+                              const v=e.target.value;
+                              if (!selectedCard) return;
+                              setSelectedCard({ ...selectedCard, status: v });
+                              saveWorkspaceCardData({ status: v });
+                            }}
+                            className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
+                          >
                             <option>Concept</option><option>In Development</option><option>Active</option><option>Archived</option>
                           </select>
                         )}
                         {galleryEditMode ? (
                           <>
-                            <select value={selectedCard?.icon ?? "FileText"} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, icon: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ icon: current.icon }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                            <select
+                              value={selectedCard?.icon ?? "FileText"}
+                              onChange={e=> {
+                                const v=e.target.value;
+                                if (!selectedCard) return;
+                                setSelectedCard({ ...selectedCard, icon: v });
+                                saveWorkspaceCardData({ icon: v });
+                              }}
+                              className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
+                            >
                               {ICON_OPTIONS.map(o=> <option key={o} value={o}>{o}</option>)}
                             </select>
-                            <input value={selectedCard?.iconColor ?? ""} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, iconColor: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ iconColor: current.iconColor }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} placeholder="linear-gradient(135deg, #00f0ff, #4338ca)" className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white flex-1 min-w-[160px]" />
+                            <input
+                              value={selectedCard?.iconColor ?? ""}
+                              onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, iconColor: e.target.value }); }}
+                              onBlur={e=> saveWorkspaceCardData({ iconColor: e.target.value })}
+                              placeholder="linear-gradient(135deg, #00f0ff, #4338ca)"
+                              className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white flex-1 min-w-[160px]"
+                            />
                           </>
                         ) : (
                           <span className="text-xs text-slate-500">{(() => { try{ return JSON.parse(selectedCard?.tags ?? "[]").join(", "); } catch{ return ""; }})()}</span>
                         )}
                       </div>
                       {galleryEditMode ? (
-                        <textarea value={selectedCard?.description ?? ""} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, description: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ description: current.description }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} rows={2} placeholder="Description" className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300" />
+                        <textarea
+                          value={selectedCard?.description ?? ""}
+                          onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, description: e.target.value }); }}
+                          onBlur={e=> saveWorkspaceCardData({ description: e.target.value })}
+                          rows={2}
+                          placeholder="Description"
+                          className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300"
+                        />
                       ) : (
                         <p className="mt-3 text-sm leading-relaxed" style={{ color: selectedCard?.summaryColor ?? "#94a3b8" }}>{selectedCard?.description ?? ""}</p>
                       )}

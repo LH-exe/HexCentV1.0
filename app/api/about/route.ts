@@ -6,9 +6,9 @@ const PAGE_KEY = "about_me";
 
 export async function GET() {
   const headers = {
-    "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
-    "CDN-Cache-Control": "public, s-maxage=60",
-    "Vercel-CDN-Cache-Control": "public, s-maxage=60",
+    "Cache-Control": "public, s-maxage=120, stale-while-revalidate=600",
+    "CDN-Cache-Control": "public, s-maxage=120",
+    "Vercel-CDN-Cache-Control": "public, s-maxage=120",
   };
   if (!isDbConfigured()) {
     return NextResponse.json({ layout: [], fallback: true }, { headers });

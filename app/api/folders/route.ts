@@ -6,7 +6,20 @@ export async function GET() {
   const session = await getSession();
   if (session?.role !== "ADMIN") return NextResponse.json({ folders: [] });
   if (!isDbConfigured()) return NextResponse.json({ folders: [] });
-  const folders = await safeDbQuery(() => prisma.folder.findMany({ orderBy: { createdAt: "asc" } }), []);
+  const folders = await safeDbQuery(
+    () =>
+      prisma.folder.findMany({
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          name: true,
+          color: true,
+          parentId: true,
+          createdAt: true,
+        },
+      }),
+    []
+  );
   return NextResponse.json({ folders });
 }
 

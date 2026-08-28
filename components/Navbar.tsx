@@ -25,9 +25,12 @@ export default function Navbar() {
 
   useEffect(() => {
     setMounted(true);
-    fetch("/api/admin/stats", { cache: "no-store" })
-      .then((r) => {
-        if (r.ok) setRole("ADMIN");
+    // Edge-auth check (<5ms, no Node lambda) — replaces heavy /api/admin/stats polling
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.role === "ADMIN") setRole("ADMIN");
+        else if (d.role === "GUEST" || d.authenticated) setRole("GUEST");
         else {
           if (typeof document !== "undefined" && document.cookie.includes("hexcent_session")) {
             setRole("GUEST");
