@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
           title: true,
           icon: true,
           folderId: true,
+          isPublic: true,
           userId: true,
           createdAt: true,
           updatedAt: true,

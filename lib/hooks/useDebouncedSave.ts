@@ -2,130 +2,108 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-type SaveFn<T> = (value: T) => Promise<void>;
-
 export function useDebouncedSave<T>(
-  value: T,
-  saveFn: SaveFn<T>,
-  delay = 10000,
-  enabled = true,
+  data: T,
+  saveFn: (payload: T) => Promise<void>,
+  delayMs: number = 1500,
+  enabled: boolean = true,
   resetKey?: string
 ) {
   const [status, setStatus] = useState<"idle" | "syncing" | "saved" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const periodicRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const firstRender = useRef(true);
-  const pendingRef = useRef<T | null>(null);
-  const lastSavedRef = useRef<string | null>(null);
-  const lastValueRef = useRef<string>("");
+  const dataRef = useRef<T>(data);
+  const saveFnRef = useRef(saveFn);
+  const isFirstRender = useRef(true);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const periodicTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isDirtyRef = useRef(false);
   const prevResetKeyRef = useRef<string | undefined>(resetKey);
   const skipNextDirtyRef = useRef(false);
 
-  const isDirty = useCallback((val: T) => {
-    const str = JSON.stringify(val);
-    return str !== lastSavedRef.current;
-  }, []);
+  useEffect(() => {
+    dataRef.current = data;
+    saveFnRef.current = saveFn;
+  });
 
-  const flush = useCallback(async () => {
-    if (pendingRef.current === null) return;
-    const toSave = pendingRef.current;
-    const str = JSON.stringify(toSave);
-    if (str === lastSavedRef.current) {
-      pendingRef.current = null;
-      setStatus("saved");
-      return;
-    }
-    pendingRef.current = null;
+  const executeSave = useCallback(async () => {
+    if (!isDirtyRef.current || !enabled) return;
     setStatus("syncing");
     setError(null);
     try {
-      await saveFn(toSave);
-      lastSavedRef.current = str;
+      await saveFnRef.current(dataRef.current);
+      isDirtyRef.current = false;
       setStatus("saved");
-    } catch (e: unknown) {
+    } catch (err) {
+      console.error("[useDebouncedSave] Save failed:", err);
       setStatus("error");
-      setError(e instanceof Error ? e.message : String(e));
-      // keep pending for retry? Re-queue
-      pendingRef.current = toSave;
+      setError(err instanceof Error ? err.message : String(err));
     }
-  }, [saveFn]);
+  }, [enabled]);
 
   useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      lastSavedRef.current = JSON.stringify(value);
-      lastValueRef.current = JSON.stringify(value);
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
       prevResetKeyRef.current = resetKey;
+      // Initialize as saved, not syncing, for initial load
       setStatus("saved");
       return;
     }
+
     if (resetKey !== prevResetKeyRef.current) {
       prevResetKeyRef.current = resetKey;
-      // Defer resetting lastSaved until next value change to capture new doc's payload after state batch
       skipNextDirtyRef.current = true;
-      pendingRef.current = null;
+      isDirtyRef.current = false;
       setStatus("saved");
       setError(null);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      // Update lastValue to current to avoid double handling, but keep lastSaved for next
-      lastValueRef.current = JSON.stringify(value);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       return;
     }
+
     if (skipNextDirtyRef.current) {
       skipNextDirtyRef.current = false;
-      lastSavedRef.current = JSON.stringify(value);
-      lastValueRef.current = JSON.stringify(value);
-      pendingRef.current = null;
+      isDirtyRef.current = false;
       setStatus("saved");
       setError(null);
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       return;
     }
+
     if (!enabled) return;
 
-    const str = JSON.stringify(value);
-    if (str === lastValueRef.current) return;
-    lastValueRef.current = str;
-
-    if (!isDirty(value)) {
-      setStatus("saved");
-      return;
-    }
-
-    pendingRef.current = value;
+    isDirtyRef.current = true;
     setStatus("syncing");
-    setError(null);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      flush();
-    }, delay);
+
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      executeSave();
+    }, delayMs);
 
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
-  }, [value, delay, enabled, flush, isDirty, resetKey]);
+  }, [data, delayMs, enabled, executeSave, resetKey]);
 
-  // Periodic forced save every 60s if dirty
+  // Periodic fallback flush (every 60s during continuous typing)
   useEffect(() => {
     if (!enabled) return;
-    periodicRef.current = setInterval(() => {
-      if (pendingRef.current !== null && isDirty(pendingRef.current)) {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        flush();
+    periodicTimerRef.current = setInterval(() => {
+      if (isDirtyRef.current) {
+        executeSave();
       }
     }, 60000);
-    return () => {
-      if (periodicRef.current) clearInterval(periodicRef.current);
-    };
-  }, [enabled, flush, isDirty]);
 
+    return () => {
+      if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
+    };
+  }, [enabled, executeSave]);
+
+  // Do not cancel pending saves on unmount - let them flush
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (periodicRef.current) clearInterval(periodicRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
     };
   }, []);
 
-  return { status, error, flush };
+  return { status, error, flush: executeSave };
 }

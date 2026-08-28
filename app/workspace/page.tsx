@@ -141,23 +141,93 @@ export default function WorkspacePage() {
     if (activeTab === "tasks" && role==="ADMIN") fetch("/api/tasks", { cache: "no-store" }).then(r=>r.json()).then(d=> setTasks(d.tasks ?? [])).catch(()=>{});
   }, [activeTab, role]);
 
+  // Fetch full document content on selection
   useEffect(() => {
-    if (!selectedDoc) return;
-    setTitle(selectedDoc.title);
-    const allowed = ["📄","📝","📊","📌","💡","📓","📒"];
-    const rawIcon = selectedDoc.icon ?? "📄";
-    const isAllowed = allowed.includes(rawIcon);
-    const normalized = isAllowed ? rawIcon : "📄";
-    setIcon(normalized);
-    setFolderId(selectedDoc.folderId ?? null);
-    setBlocks(parseContent(selectedDoc.content));
-  }, [selectedDoc?.id]);
+    if (!selectedId) {
+      setTitle("");
+      setIcon("📄");
+      setFolderId(null);
+      setBlocks([]);
+      return;
+    }
+
+    let isMounted = true;
+    async function loadSelectedDocument() {
+      try {
+        const res = await fetch(`/api/documents/${selectedId}`);
+        if (!res.ok) throw new Error("Failed to load document");
+        const data = await res.json();
+        if (isMounted && data.document) {
+          setTitle(data.document.title || "Untitled Document");
+          const allowed = ["📄","📝","📊","📌","💡","📓","📒"];
+          const rawIcon = data.document.icon ?? "📄";
+          const isAllowed = allowed.includes(rawIcon);
+          setIcon(isAllowed ? rawIcon : "📄");
+          setFolderId(data.document.folderId ?? null);
+          // Parse content JSON AST safely
+          try {
+            const rawContent = data.document.content;
+            const parsed = typeof rawContent === "string" ? JSON.parse(rawContent) : rawContent;
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              // Normalize blocks to ensure text field and defaults
+              const normalized = parsed.map((b: any) => ({
+                fontFamily: "Times New Roman",
+                fontSize: "11",
+                ...b,
+                text: b.text ?? b.content ?? "",
+              }));
+              setBlocks(normalized as Block[]);
+            } else {
+              setBlocks(parseContent(data.document.content));
+            }
+          } catch {
+            setBlocks(parseContent(data.document.content));
+          }
+        }
+      } catch (err) {
+        console.error("Error loading selected document:", err);
+      }
+    }
+
+    loadSelectedDocument();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedId]);
 
   useEffect(() => {
-    if (selectedCard) {
-      setCardBlocks(parseContent(selectedCard.content));
-      setGalleryEditMode(false);
+    if (!selectedCard) return;
+    const cardId = selectedCard.id;
+    const fallbackContent = selectedCard.content;
+    let isMounted = true;
+    async function loadSelectedCard() {
+      try {
+        const res = await fetch(`/api/workspace-cards/${cardId}`);
+        if (!res.ok) throw new Error("Failed to load card");
+        const data = await res.json();
+        const cardData = data.card || data.workspaceCard || data.document;
+        if (isMounted && cardData) {
+          // Update selectedCard with full data if needed
+          setSelectedCard(prev => prev ? { ...prev, ...cardData } : prev);
+          const content = cardData.content ?? fallbackContent;
+          setCardBlocks(parseContent(content));
+          setGalleryEditMode(false);
+        } else if (isMounted) {
+          setCardBlocks(parseContent(fallbackContent));
+          setGalleryEditMode(false);
+        }
+      } catch (err) {
+        console.error("Error loading selected card:", err);
+        if (isMounted) {
+          setCardBlocks(parseContent(selectedCard.content));
+          setGalleryEditMode(false);
+        }
+      }
     }
+    loadSelectedCard();
+    return () => {
+      isMounted = false;
+    };
   }, [selectedCard?.id]);
 
   // Keyboard shortcuts for formatting
@@ -667,12 +737,12 @@ export default function WorkspacePage() {
                 let tags: string[]=[]; try{ tags=JSON.parse(c.tags);}catch{}
                 const IconComp = ICON_MAP[c.icon] || FileText;
                 return (
-                  <div key={c.id} onClick={()=> { setSelectedCard(c); setCardBlocks(parseContent(c.content)); }} className="border border-border-dark bg-dark-700 p-4 flex flex-col group cursor-pointer hover:border-border-light transition-colors">
+                  <div key={c.id} onClick={()=> setSelectedCard(c)} className="border border-border-dark bg-dark-700 p-4 flex flex-col group cursor-pointer hover:border-border-light transition-colors">
                     <div className="flex items-center gap-2">
                       <div className="flex h-7 w-7 items-center justify-center border border-border-dark shrink-0" style={{ background: c.iconColor }}><IconComp className="h-3.5 w-3.5 text-white" /></div>
                       <span className={`px-2 py-0.5 text-[11px] tracking-widest ${statusBadgeClass(c.status)}`}>{c.status}</span>
                       <span className="ml-auto flex gap-1" onClick={e=> e.stopPropagation()}>
-                        <button onClick={()=> { setSelectedCard(c); setCardBlocks(parseContent(c.content)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-[11px] text-slate-400 hover:text-white hover:border-cyan-400">Edit</button>
+                        <button onClick={()=> setSelectedCard(c)} className="border border-border-dark bg-dark-900 px-2 py-1 text-[11px] text-slate-400 hover:text-white hover:border-cyan-400">Edit</button>
                         <button onClick={()=> deleteCard(c.id)} className="border border-border-dark bg-dark-900 p-1 text-slate-500 hover:text-accent-red"><Trash2 className="h-3 w-3" /></button>
                       </span>
                     </div>

@@ -25,7 +25,23 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   try { body = await req.json(); } catch { body = {}; }
   if (!isDbConfigured()) return NextResponse.json({ project: { id, ...body }, fallback: true });
   try {
-    const project = await prisma.project.update({ where: { id }, data: { ...(body.slug !== undefined && { slug: body.slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-") }), ...(body.title !== undefined && { title: body.title }), ...(body.description !== undefined && { description: body.description }), ...(body.icon !== undefined && { icon: body.icon }), ...(body.iconColor !== undefined && { iconColor: body.iconColor }), ...(body.titleColor !== undefined && { titleColor: body.titleColor }), ...(body.summaryColor !== undefined && { summaryColor: body.summaryColor }), ...(body.status !== undefined && { status: body.status }), ...(body.tags !== undefined && { tags: body.tags }), ...(body.content !== undefined && { content: body.content }), ...(body.isPublic !== undefined && { isPublic: body.isPublic }), ...(body.order !== undefined && { order: body.order }) } });
+    const project = await prisma.project.update({
+      where: { id },
+      data: {
+        ...(body.slug !== undefined && { slug: body.slug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-") }),
+        ...(body.title !== undefined && { title: body.title }),
+        ...(body.description !== undefined && { description: body.description }),
+        ...(body.icon !== undefined && { icon: body.icon }),
+        ...(body.iconColor !== undefined && { iconColor: body.iconColor }),
+        ...(body.titleColor !== undefined && { titleColor: body.titleColor }),
+        ...(body.summaryColor !== undefined && { summaryColor: body.summaryColor }),
+        ...(body.status !== undefined && { status: body.status }),
+        ...(body.tags !== undefined && { tags: typeof body.tags === "string" ? body.tags : JSON.stringify(body.tags) }),
+        ...(body.content !== undefined && { content: typeof body.content === "string" ? body.content : JSON.stringify(body.content) }),
+        ...(body.isPublic !== undefined && { isPublic: body.isPublic }),
+        ...(body.order !== undefined && { order: body.order }),
+      },
+    });
     return NextResponse.json({ project });
   } catch { return NextResponse.json({ error: "Not found" }, { status: 404 }); }
 }
