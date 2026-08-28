@@ -1,5 +1,21 @@
 import { PrismaClient } from "@prisma/client"
 
+// --- Neon pooling enforcement: ensure pgbouncer=true for serverless to prevent connection starvation ---
+function ensurePooledUrl(url: string | undefined): string | undefined {
+  if (!url) return url;
+  if (url.includes("localhost") || url.includes("127.0.0.1") || url.includes("file:")) return url;
+  if (url.includes("neon.tech") && !url.includes("pgbouncer")) {
+    const sep = url.includes("?") ? "&" : "?";
+    const pooled = `${url}${sep}pgbouncer=true&connection_limit=1`;
+    // Mutate env so Prisma datasource reads pooled variant (serverless-friendly)
+    process.env.DATABASE_URL = pooled;
+    if (process.env.NODE_ENV !== "production") console.log("[db] Neon pooling enabled (pgbouncer=true)");
+    return pooled;
+  }
+  return url;
+}
+ensurePooledUrl(process.env.DATABASE_URL);
+
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient; __inMemoryFallback?: { documents: Map<string, unknown>; folders: Map<string, unknown>; tasks: Map<string, unknown>; projects: Map<string, unknown>; layouts: Map<string, unknown> } }
 
 export const prisma =

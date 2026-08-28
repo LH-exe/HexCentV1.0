@@ -207,13 +207,30 @@ export default function WorkspacePage() {
     if (activeTab === "tasks" && role==="ADMIN") fetch("/api/tasks", { cache: "no-store" }).then(r=>r.json()).then(d=> setTasks(d.tasks ?? [])).catch(()=>{});
   }, [activeTab, role]);
 
-  // Fetch full document content on selection
+  const savePayload = { title, icon, folderId, content: serialize(blocks) };
+  const doSave = useCallback(async (payload: typeof savePayload) => {
+    if (!selectedId) return;
+    const res = await fetch(`/api/documents/${selectedId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (!res.ok) throw new Error("Save failed");
+    const data = await res.json();
+    setDocs(prev => prev.map(d => d.id === selectedId ? { ...d, ...data.document } : d));
+  }, [selectedId]);
+  const { status, error: saveError, resetBaseline } = useDebouncedSave(savePayload, doSave, 900, !!selectedId && role==="ADMIN");
+
+  const saveCardContent = useCallback(async (payload: { content: string }) => {
+    if (!selectedCard) return;
+    await fetch(`/api/workspace-cards/${selectedCard.id}`, { method: "PATCH", headers: { "Content-Type":"application/json"}, body: JSON.stringify(payload) });
+  }, [selectedCard]);
+  const { status: cardSaveStatus, resetBaseline: resetCardBaseline } = useDebouncedSave({ content: serialize(cardBlocks) }, saveCardContent as unknown as (v: { content: string })=>Promise<void>, 1500, !!selectedCard);
+
+  // Fetch full document content on selection — resets debounced baseline to prevent hydration false-dirty
   useEffect(() => {
     if (!selectedId) {
       setTitle("");
       setIcon("📄");
       setFolderId(null);
       setBlocks([]);
+      resetBaseline({ title: "", icon: "📄", folderId: null, content: serialize([]) });
       return;
     }
 
@@ -224,13 +241,17 @@ export default function WorkspacePage() {
         if (!res.ok) throw new Error("Failed to load document");
         const data = await res.json();
         if (isMounted && data.document) {
-          setTitle(data.document.title || "Untitled Document");
+          const docTitle = data.document.title || "Untitled Document";
           const allowed = ["📄","📝","📊","📌","💡","📓","📒"];
           const rawIcon = data.document.icon ?? "📄";
           const isAllowed = allowed.includes(rawIcon);
-          setIcon(isAllowed ? rawIcon : "📄");
-          setFolderId(data.document.folderId ?? null);
+          const docIcon = isAllowed ? rawIcon : "📄";
+          const docFolderId = data.document.folderId ?? null;
+          setTitle(docTitle);
+          setIcon(docIcon);
+          setFolderId(docFolderId);
           // Parse content JSON AST safely
+          let parsedBlocks: Block[];
           try {
             const rawContent = data.document.content;
             const parsed = typeof rawContent === "string" ? JSON.parse(rawContent) : rawContent;
@@ -242,13 +263,18 @@ export default function WorkspacePage() {
                 ...b,
                 text: b.text ?? b.content ?? "",
               }));
+              parsedBlocks = normalized as Block[];
               setBlocks(normalized as Block[]);
             } else {
-              setBlocks(parseContent(data.document.content));
+              parsedBlocks = parseContent(data.document.content);
+              setBlocks(parsedBlocks);
             }
           } catch {
-            setBlocks(parseContent(data.document.content));
+            parsedBlocks = parseContent(data.document.content);
+            setBlocks(parsedBlocks);
           }
+          // Reset dirty baseline so save spinner does not fire immediately on hydration
+          resetBaseline({ title: docTitle, icon: docIcon, folderId: docFolderId, content: serialize(parsedBlocks) });
         }
       } catch (err) {
         console.error("Error loading selected document:", err);
@@ -259,7 +285,7 @@ export default function WorkspacePage() {
     return () => {
       isMounted = false;
     };
-  }, [selectedId]);
+  }, [selectedId, resetBaseline]);
 
   useEffect(() => {
     if (!selectedCard) return;
@@ -276,10 +302,14 @@ export default function WorkspacePage() {
           // Update selectedCard with full data if needed
           setSelectedCard(prev => prev ? { ...prev, ...cardData } : prev);
           const content = cardData.content ?? fallbackContent;
-          setCardBlocks(parseContent(content));
+          const parsed = parseContent(content);
+          setCardBlocks(parsed);
+          resetCardBaseline({ content: serialize(parsed) });
           setGalleryEditMode(false);
         } else if (isMounted) {
-          setCardBlocks(parseContent(fallbackContent));
+          const parsed = parseContent(fallbackContent);
+          setCardBlocks(parsed);
+          resetCardBaseline({ content: serialize(parsed) });
           setGalleryEditMode(false);
         }
       } catch (err) {
@@ -288,6 +318,7 @@ export default function WorkspacePage() {
           // SAFE FALLBACK: Guard against null with optional chaining and fallback parsing
           const fallback = selectedCard?.content ? parseContent(selectedCard.content) : parseContent(fallbackContent ?? null);
           setCardBlocks(fallback);
+          resetCardBaseline({ content: serialize(fallback) });
           setGalleryEditMode(false);
         }
       }
@@ -296,7 +327,7 @@ export default function WorkspacePage() {
     return () => {
       isMounted = false;
     };
-  }, [selectedCard?.id]);
+  }, [selectedCard?.id, resetCardBaseline]);
 
   // Keyboard shortcuts for formatting
   useEffect(() => {
@@ -318,22 +349,6 @@ export default function WorkspacePage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [selectedBlock]);
-
-  const savePayload = { title, icon, folderId, content: serialize(blocks) };
-  const doSave = useCallback(async (payload: typeof savePayload) => {
-    if (!selectedId) return;
-    const res = await fetch(`/api/documents/${selectedId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) throw new Error("Save failed");
-    const data = await res.json();
-    setDocs(prev => prev.map(d => d.id === selectedId ? { ...d, ...data.document } : d));
-  }, [selectedId]);
-  const { status, error: saveError } = useDebouncedSave(savePayload, doSave, 900, !!selectedId && role==="ADMIN", selectedId ?? undefined);
-
-  const saveCardContent = useCallback(async (payload: { content: string }) => {
-    if (!selectedCard) return;
-    await fetch(`/api/workspace-cards/${selectedCard.id}`, { method: "PATCH", headers: { "Content-Type":"application/json"}, body: JSON.stringify(payload) });
-  }, [selectedCard]);
-  const { status: cardSaveStatus } = useDebouncedSave({ content: serialize(cardBlocks) }, saveCardContent as unknown as (v: { content: string })=>Promise<void>, 1500, !!selectedCard, selectedCard?.id);
 
   async function handleCreateDoc() {
     const res = await fetch("/api/documents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "Untitled Document", content: "[]", icon: "📄", folderId: null }) });

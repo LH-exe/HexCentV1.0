@@ -45,9 +45,74 @@ function toEmbedUrl(url: string): string | null {
   return null;
 }
 
-function parseContent(raw: string): Block[] {
-  try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) return arr; } catch {}
-  return [{ id: "1", type: "paragraph", text: "" }];
+function parseContent(rawContent: string | null | undefined | any): Block[] {
+  const empty: Block = { id: "1", type: "paragraph", text: "" };
+  if (!rawContent) return [empty];
+  if (Array.isArray(rawContent)) {
+    return rawContent.length > 0
+      ? (rawContent as any[]).map((b: any) => ({
+          id: b?.id ?? Math.random().toString(36).slice(2, 8),
+          type: b?.type ?? "paragraph",
+          text: b?.text ?? b?.content ?? "",
+          checked: b?.checked,
+          url: b?.url,
+          caption: b?.caption,
+        })) as Block[]
+      : [empty];
+  }
+  if (typeof rawContent === "string") {
+    try {
+      const parsed = JSON.parse(rawContent);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return (parsed as any[]).map((b: any) => ({
+          id: b?.id ?? Math.random().toString(36).slice(2, 8),
+          type: b?.type ?? "paragraph",
+          text: b?.text ?? b?.content ?? "",
+          checked: b?.checked,
+          url: b?.url ?? b?.text,
+          caption: b?.caption,
+        })) as Block[];
+      }
+      if (typeof parsed === "string") {
+        return [{ id: "1", type: "paragraph", text: parsed }];
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const obj = parsed as any;
+        return [
+          {
+            id: obj?.id ?? "1",
+            type: obj?.type ?? "paragraph",
+            text: obj?.text ?? obj?.content ?? "",
+            checked: obj?.checked,
+            url: obj?.url,
+            caption: obj?.caption,
+          } as Block,
+        ];
+      }
+    } catch {
+      if (rawContent === "[]") return [empty];
+      return [{ id: "1", type: "paragraph", text: rawContent }];
+    }
+    if (rawContent === "[]") return [empty];
+    return [{ id: "1", type: "paragraph", text: rawContent }];
+  }
+  if (typeof rawContent === "object") {
+    const obj = rawContent as any;
+    if (obj && (obj.text !== undefined || obj.content !== undefined || obj.type !== undefined)) {
+      return [
+        {
+          id: obj?.id ?? "1",
+          type: obj?.type ?? "paragraph",
+          text: obj?.text ?? obj?.content ?? "",
+          checked: obj?.checked,
+          url: obj?.url,
+          caption: obj?.caption,
+        } as Block,
+      ];
+    }
+    return [empty];
+  }
+  return [empty];
 }
 
 export default function ProjectPage() {
@@ -63,52 +128,103 @@ export default function ProjectPage() {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [draggedBlock, setDraggedBlock] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" }).then(r=>r.json()).then(d=> { if(d.role==="ADMIN") setIsAdmin(true); }).catch(()=>{});
   }, []);
 
+  const savePayload = { title, description, icon: project?.icon, iconColor: project?.iconColor, titleColor: (project as unknown as { titleColor: string })?.titleColor, summaryColor: (project as unknown as { summaryColor: string })?.summaryColor, status, tags: JSON.stringify(tagsStr.split(",").map(s=>s.trim()).filter(Boolean)), content: JSON.stringify(blocks) };
+
+  const doSave = useCallback(async (payload: typeof savePayload) => {
+    const targetId = project?.id || slug;
+    if (!targetId) return;
+    const res = await fetch(`/api/projects/${targetId}`, { method: "PATCH", headers: { "Content-Type":"application/json"}, body: JSON.stringify(payload) });
+    if (!res.ok) throw new Error("Failed to save project content");
+  }, [project?.id, slug]);
+
+  const { status: saveStatus, resetBaseline } = useDebouncedSave(savePayload, doSave, 1500, !!project && isAdmin);
+
   useEffect(() => {
+    let isMounted = true;
     async function load() {
       setLoading(true);
-      // try fetch by id/slug via projects list fallback
-      const res = await fetch("/api/projects", { cache: "no-store" });
-      const data = await res.json();
-      const found = (data.projects ?? []).find((p: Project) => p.slug === slug || p.id === slug);
-      if (found) {
-        setProject(found);
-        setTitle(found.title);
-        setDescription(found.description ?? "");
-        setStatus(found.status);
-        try { const t = JSON.parse(found.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch { setTagsStr(""); }
-        setBlocks(parseContent(found.content));
-      } else {
-        const r2 = await fetch(`/api/projects/${slug}`, { cache: "no-store" });
-        if (r2.ok) {
-          const d2 = await r2.json();
-          if (d2.project) {
-            setProject(d2.project);
-            setTitle(d2.project.title);
-            setDescription(d2.project.description ?? "");
-            setStatus(d2.project.status);
-            setBlocks(parseContent(d2.project.content));
-            try { const t = JSON.parse(d2.project.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch {}
+      try {
+        // try fetch by id/slug via projects list fallback
+        const res = await fetch("/api/projects", { cache: "no-store" });
+        const data = await res.json();
+        const found = (data.projects ?? []).find((p: Project) => p.slug === slug || p.id === slug);
+        if (found) {
+          if (!isMounted) return;
+          setProject(found);
+          setTitle(found.title);
+          setDescription(found.description ?? "");
+          setStatus(found.status);
+          try { const t = JSON.parse(found.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch { setTagsStr(""); }
+          const parsed = parseContent(found.content);
+          setBlocks(parsed);
+          // Reset debounced baseline to prevent false-dirty on hydration
+          const freshPayload = {
+            title: found.title,
+            description: found.description ?? "",
+            icon: found.icon,
+            iconColor: found.iconColor,
+            titleColor: (found as any).titleColor,
+            summaryColor: (found as any).summaryColor,
+            status: found.status,
+            tags: found.tags,
+            content: JSON.stringify(parsed),
+          };
+          // Normalize tags to payload format for snapshot consistency
+          try {
+            const tagArr = JSON.parse(found.tags);
+            freshPayload.tags = JSON.stringify(Array.isArray(tagArr) ? tagArr : []);
+          } catch {
+            freshPayload.tags = JSON.stringify([]);
+          }
+          resetBaseline(freshPayload as typeof savePayload);
+        } else {
+          const r2 = await fetch(`/api/projects/${slug}`, { cache: "no-store" });
+          if (r2.ok) {
+            const d2 = await r2.json();
+            if (d2.project && isMounted) {
+              setProject(d2.project);
+              setTitle(d2.project.title);
+              setDescription(d2.project.description ?? "");
+              setStatus(d2.project.status);
+              const parsed = parseContent(d2.project.content);
+              setBlocks(parsed);
+              try { const t = JSON.parse(d2.project.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch { setTagsStr(""); }
+              const freshPayload = {
+                title: d2.project.title,
+                description: d2.project.description ?? "",
+                icon: d2.project.icon,
+                iconColor: d2.project.iconColor,
+                titleColor: (d2.project as any).titleColor,
+                summaryColor: (d2.project as any).summaryColor,
+                status: d2.project.status,
+                tags: d2.project.tags,
+                content: JSON.stringify(parsed),
+              };
+              try {
+                const tagArr = JSON.parse(d2.project.tags);
+                freshPayload.tags = JSON.stringify(Array.isArray(tagArr) ? tagArr : []);
+              } catch {
+                freshPayload.tags = JSON.stringify([]);
+              }
+              resetBaseline(freshPayload as typeof savePayload);
+            }
           }
         }
+      } catch (e) {
+        console.error("[ProjectPage] load failed:", e);
+      } finally {
+        if (isMounted) setLoading(false);
       }
-      setLoading(false);
     }
     load();
-  }, [slug]);
-
-  const savePayload = { title, description, icon: project?.icon, iconColor: project?.iconColor, titleColor: (project as unknown as { titleColor: string })?.titleColor, summaryColor: (project as unknown as { summaryColor: string })?.summaryColor, status, tags: JSON.stringify(tagsStr.split(",").map(s=>s.trim()).filter(Boolean)), content: JSON.stringify(blocks) };
-  const doSave = useCallback(async (payload: typeof savePayload) => {
-    if (!project) return;
-    await fetch(`/api/projects/${project.id}`, { method: "PATCH", headers: { "Content-Type":"application/json"}, body: JSON.stringify(payload) });
-  }, [project]);
-  const { status: saveStatus } = useDebouncedSave(savePayload, doSave, 1500, !!project && isAdmin, project?.id);
-
-  const [draggedBlock, setDraggedBlock] = useState<string | null>(null);
+    return () => { isMounted = false; };
+  }, [slug, resetBaseline]);
 
   function updateBlock(id: string, patch: Partial<Block>) { setBlocks(prev=> prev.map(b=> b.id===id ? { ...b, ...patch } as Block : b)); }
   function addBlock(type: Block["type"] = "paragraph") {
@@ -139,6 +255,7 @@ export default function ProjectPage() {
             {saveStatus==="syncing" && <span className="flex items-center gap-1 text-slate-400"><Loader2 className="h-3 w-3 animate-spin" /> Saving...</span>}
             {saveStatus==="saved" && <span className="flex items-center gap-1 text-slate-500"><Check className="h-3 w-3" /> Saved</span>}
             {saveStatus==="idle" && <span className="text-slate-600">Idle</span>}
+            {saveStatus==="error" && <span className="flex items-center gap-1 text-accent-red">Error</span>}
           </span>
         )}
       </div>
