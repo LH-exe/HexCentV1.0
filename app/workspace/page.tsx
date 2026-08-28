@@ -53,10 +53,76 @@ const GOOGLE_COLORS = [
   "#5b0f00","#660000","#783f04","#7f6000","#274e13","#0c343d","#073763","#20124d","#4c1130",
 ];
 
-function parseContent(raw: string): Block[] {
-  try { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length > 0) return arr.map((b: Block) => ({ fontFamily: "Times New Roman", fontSize: "11", ...b })); } catch {}
-  if (raw && raw !== "[]") return [{ id: "1", type: "paragraph", text: raw, fontFamily: "Times New Roman", fontSize: "11" }];
-  return [{ id: "1", type: "paragraph", text: "", fontFamily: "Times New Roman", fontSize: "11" }];
+function parseContent(rawContent: string | null | undefined | any): Block[] {
+  const empty: Block = { id: "1", type: "paragraph", text: "", fontFamily: "Times New Roman", fontSize: "11" };
+  if (!rawContent) {
+    return [empty];
+  }
+  if (Array.isArray(rawContent)) {
+    return rawContent.length > 0
+      ? (rawContent as any[]).map((b: any) => ({
+          fontFamily: "Times New Roman",
+          fontSize: "11",
+          ...b,
+          id: b?.id ?? Math.random().toString(36).slice(2, 8),
+          type: b?.type ?? "paragraph",
+          text: b?.text ?? b?.content ?? "",
+        })) as Block[]
+      : [empty];
+  }
+  if (typeof rawContent === "string") {
+    try {
+      const parsed = JSON.parse(rawContent);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return (parsed as any[]).map((b: any) => ({
+          fontFamily: "Times New Roman",
+          fontSize: "11",
+          ...b,
+          id: b?.id ?? Math.random().toString(36).slice(2, 8),
+          type: b?.type ?? "paragraph",
+          text: b?.text ?? b?.content ?? "",
+        })) as Block[];
+      }
+      if (typeof parsed === "string") {
+        return [{ ...empty, text: parsed }];
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const obj = parsed as any;
+        return [
+          {
+            fontFamily: "Times New Roman",
+            fontSize: "11",
+            ...obj,
+            id: obj?.id ?? "1",
+            type: obj?.type ?? "paragraph",
+            text: obj?.text ?? obj?.content ?? "",
+          } as Block,
+        ];
+      }
+    } catch {
+      if (rawContent === "[]") return [empty];
+      return [{ ...empty, text: rawContent }];
+    }
+    if (rawContent === "[]") return [empty];
+    return [{ ...empty, text: rawContent }];
+  }
+  if (typeof rawContent === "object") {
+    const obj = rawContent as any;
+    if (obj && (obj.text !== undefined || obj.content !== undefined || obj.type !== undefined)) {
+      return [
+        {
+          fontFamily: "Times New Roman",
+          fontSize: "11",
+          ...obj,
+          id: obj?.id ?? "1",
+          type: obj?.type ?? "paragraph",
+          text: obj?.text ?? obj?.content ?? "",
+        } as Block,
+      ];
+    }
+    return [empty];
+  }
+  return [empty];
 }
 function serialize(blocks: Block[]): string { return JSON.stringify(blocks); }
 
@@ -219,7 +285,9 @@ export default function WorkspacePage() {
       } catch (err) {
         console.error("Error loading selected card:", err);
         if (isMounted) {
-          setCardBlocks(parseContent(selectedCard.content));
+          // SAFE FALLBACK: Guard against null with optional chaining and fallback parsing
+          const fallback = selectedCard?.content ? parseContent(selectedCard.content) : parseContent(fallbackContent ?? null);
+          setCardBlocks(fallback);
           setGalleryEditMode(false);
         }
       }
@@ -523,7 +591,7 @@ export default function WorkspacePage() {
                     <option value="">No folder</option>
                     {folders.map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}
                   </select>
-                  <button onClick={()=> handleDeleteDoc(selectedDoc.id)} className="h-10 w-10 border border-accent-red/20 bg-dark-900 flex items-center justify-center text-accent-red shrink-0"><Trash2 className="h-3.5 w-3.5" /></button>
+                  <button onClick={()=> { if (!selectedDoc?.id) return; handleDeleteDoc(selectedDoc.id); }} className="h-10 w-10 border border-accent-red/20 bg-dark-900 flex items-center justify-center text-accent-red shrink-0"><Trash2 className="h-3.5 w-3.5" /></button>
                 </div>
 
                 <div className="border-b border-border-dark bg-dark-900 px-3 py-2 flex flex-wrap items-center gap-2 text-xs">
@@ -765,40 +833,40 @@ export default function WorkspacePage() {
                   <button onClick={()=> setSelectedCard(null)} className="text-xs tracking-widest text-slate-400 hover:text-white flex items-center gap-1"><ArrowLeft className="h-3 w-3" /> Back to Gallery</button>
                   <button onClick={()=> setGalleryEditMode(v=> !v)} className={`border px-3 py-1 text-xs tracking-widest ${galleryEditMode ? "bg-white text-dark-900 border-white" : "bg-dark-700 text-slate-300 border-border-dark"}`}>{galleryEditMode ? "View Mode" : "Edit Mode"}</button>
                 </div>
-                <div className="h-24 border border-border-dark" style={{ background: selectedCard.iconColor }} />
+                <div className="h-24 border border-border-dark" style={{ background: selectedCard?.iconColor ?? "#0c121c" }} />
                 <div className="border border-border-dark bg-dark-700 p-6">
                   <div className="flex items-start gap-4">
-                    <div className="flex h-12 w-12 items-center justify-center border border-border-dark shrink-0" style={{ background: selectedCard.iconColor }}>
-                      <RenderIcon name={selectedCard.icon} className="w-6 h-6 text-white" />
+                    <div className="flex h-12 w-12 items-center justify-center border border-border-dark shrink-0" style={{ background: selectedCard?.iconColor ?? "#0c121c" }}>
+                      <RenderIcon name={selectedCard?.icon ?? "FileText"} className="w-6 h-6 text-white" />
                     </div>
                     <div className="flex-1">
                       {galleryEditMode ? (
-                        <input value={selectedCard.title} onChange={e=> setSelectedCard({ ...selectedCard, title: e.target.value })} onBlur={async ()=> { await fetch(`/api/workspace-cards/${selectedCard.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ title: selectedCard.title }) }); setCards(prev=> prev.map(x=> x.id===selectedCard.id ? selectedCard : x)); }} className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1" />
+                        <input value={selectedCard?.title ?? ""} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, title: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ title: current.title }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1" />
                       ) : (
-                        <h1 className="text-xl font-bold" style={{ color: selectedCard.titleColor }}>{selectedCard.title}</h1>
+                        <h1 className="text-xl font-bold" style={{ color: selectedCard?.titleColor ?? "#ffffff" }}>{selectedCard?.title ?? ""}</h1>
                       )}
                       <div className="mt-2 flex flex-wrap gap-2 items-center">
-                        <span className={`border px-2 py-1 text-xs ${statusBadgeClass(selectedCard.status)}`}>{selectedCard.status}</span>
+                        <span className={`border px-2 py-1 text-xs ${statusBadgeClass(selectedCard?.status ?? "Concept")}`}>{selectedCard?.status ?? "Concept"}</span>
                         {galleryEditMode && (
-                          <select value={selectedCard.status} onChange={e=> setSelectedCard({ ...selectedCard, status: e.target.value })} onBlur={async ()=> { await fetch(`/api/workspace-cards/${selectedCard.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ status: selectedCard.status }) }); setCards(prev=> prev.map(x=> x.id===selectedCard.id ? selectedCard : x)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                          <select value={selectedCard?.status ?? "Concept"} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, status: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ status: current.status }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
                             <option>Concept</option><option>In Development</option><option>Active</option><option>Archived</option>
                           </select>
                         )}
                         {galleryEditMode ? (
                           <>
-                            <select value={selectedCard.icon} onChange={e=> setSelectedCard({ ...selectedCard, icon: e.target.value })} onBlur={async ()=> { await fetch(`/api/workspace-cards/${selectedCard.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ icon: selectedCard.icon }) }); setCards(prev=> prev.map(x=> x.id===selectedCard.id ? selectedCard : x)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
+                            <select value={selectedCard?.icon ?? "FileText"} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, icon: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ icon: current.icon }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white">
                               {ICON_OPTIONS.map(o=> <option key={o} value={o}>{o}</option>)}
                             </select>
-                            <input value={selectedCard.iconColor} onChange={e=> setSelectedCard({ ...selectedCard, iconColor: e.target.value })} onBlur={async ()=> { await fetch(`/api/workspace-cards/${selectedCard.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ iconColor: selectedCard.iconColor }) }); setCards(prev=> prev.map(x=> x.id===selectedCard.id ? selectedCard : x)); }} placeholder="linear-gradient(135deg, #00f0ff, #4338ca)" className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white flex-1 min-w-[160px]" />
+                            <input value={selectedCard?.iconColor ?? ""} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, iconColor: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ iconColor: current.iconColor }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} placeholder="linear-gradient(135deg, #00f0ff, #4338ca)" className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white flex-1 min-w-[160px]" />
                           </>
                         ) : (
-                          <span className="text-xs text-slate-500">{(() => { try{ return JSON.parse(selectedCard.tags).join(", "); } catch{ return ""; }})()}</span>
+                          <span className="text-xs text-slate-500">{(() => { try{ return JSON.parse(selectedCard?.tags ?? "[]").join(", "); } catch{ return ""; }})()}</span>
                         )}
                       </div>
                       {galleryEditMode ? (
-                        <textarea value={selectedCard.description} onChange={e=> setSelectedCard({ ...selectedCard, description: e.target.value })} onBlur={async ()=> { await fetch(`/api/workspace-cards/${selectedCard.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ description: selectedCard.description }) }); setCards(prev=> prev.map(x=> x.id===selectedCard.id ? selectedCard : x)); }} rows={2} placeholder="Description" className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300" />
+                        <textarea value={selectedCard?.description ?? ""} onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, description: e.target.value }); }} onBlur={async ()=> { if (!selectedCard) return; const current = selectedCard; await fetch(`/api/workspace-cards/${current.id}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ description: current.description }) }); setCards(prev=> prev.map(x=> x.id===current.id ? current : x)); }} rows={2} placeholder="Description" className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300" />
                       ) : (
-                        <p className="mt-3 text-sm leading-relaxed" style={{ color: selectedCard.summaryColor }}>{selectedCard.description}</p>
+                        <p className="mt-3 text-sm leading-relaxed" style={{ color: selectedCard?.summaryColor ?? "#94a3b8" }}>{selectedCard?.description ?? ""}</p>
                       )}
                     </div>
                   </div>
