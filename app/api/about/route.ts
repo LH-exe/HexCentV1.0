@@ -5,19 +5,24 @@ import { getSession } from "@/lib/auth";
 const PAGE_KEY = "about_me";
 
 export async function GET() {
+  const headers = {
+    "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+    "CDN-Cache-Control": "public, s-maxage=60",
+    "Vercel-CDN-Cache-Control": "public, s-maxage=60",
+  };
   if (!isDbConfigured()) {
-    return NextResponse.json({ layout: [], fallback: true });
+    return NextResponse.json({ layout: [], fallback: true }, { headers });
   }
   const layout = await safeDbQuery(
     () => prisma.pageLayout.findUnique({ where: { pageKey: PAGE_KEY } }),
     null
   );
-  if (!layout) return NextResponse.json({ layout: [] });
+  if (!layout) return NextResponse.json({ layout: [] }, { headers });
   try {
     const parsed = JSON.parse(layout.layoutJson);
-    return NextResponse.json({ layout: parsed });
+    return NextResponse.json({ layout: parsed }, { headers });
   } catch {
-    return NextResponse.json({ layout: [] });
+    return NextResponse.json({ layout: [] }, { headers });
   }
 }
 

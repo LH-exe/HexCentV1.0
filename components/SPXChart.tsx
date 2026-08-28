@@ -94,10 +94,13 @@ export default function SPXChart() {
     setCandles([...initial.slice(1), newCandle]);
   }, [mounted]);
 
-  // Tick every 200ms with price-triggered discrete volume bursts
+  // Tab Visibility Throttling: Zombie Execution Guard - pause ticks when tab hidden
   useEffect(() => {
     if (!mounted) return;
-    tickRef.current = setInterval(() => {
+    let tickInterval: ReturnType<typeof setInterval> | null = null;
+    let rollInterval: ReturnType<typeof setInterval> | null = null;
+
+    const tickPriceAction = () => {
       elapsedRef.current = Math.min(60, elapsedRef.current + 0.2);
       const tau = elapsedRef.current / 60;
       const targetVol = targetRef.current * fTau(tau);
@@ -144,14 +147,9 @@ export default function SPXChart() {
         arr[lastIdx] = last;
         return arr;
       });
-    }, 200);
-    return () => { if (tickRef.current) clearInterval(tickRef.current); };
-  }, [mounted]);
+    };
 
-  // Rollover every 60s - active candle starts strictly at 0
-  useEffect(() => {
-    if (!mounted) return;
-    rollRef.current = setInterval(() => {
+    const rollAction = () => {
       setCandles(prev => {
         if (prev.length === 0) return prev;
         const lastClose = prev[prev.length - 1].close;
@@ -162,8 +160,51 @@ export default function SPXChart() {
         const newCandle: Candle = { open, high: open, low: open, close: open, volume: 0 };
         return [...prev.slice(1), newCandle];
       });
-    }, 60000);
-    return () => { if (rollRef.current) clearInterval(rollRef.current); };
+    };
+
+    const startSimulation = () => {
+      if (!tickInterval) {
+        tickInterval = setInterval(tickPriceAction, 200);
+        tickRef.current = tickInterval;
+      }
+      if (!rollInterval) {
+        rollInterval = setInterval(rollAction, 60000);
+        rollRef.current = rollInterval;
+      }
+    };
+
+    const stopSimulation = () => {
+      if (tickInterval) {
+        clearInterval(tickInterval);
+        tickInterval = null;
+        tickRef.current = null;
+      }
+      if (rollInterval) {
+        clearInterval(rollInterval);
+        rollInterval = null;
+        rollRef.current = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopSimulation();
+      } else {
+        startSimulation();
+      }
+    };
+
+    // Initial startup if tab is focused
+    if (!document.hidden) {
+      startSimulation();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      stopSimulation();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [mounted]);
 
   if (!mounted) {

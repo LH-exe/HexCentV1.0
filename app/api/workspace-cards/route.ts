@@ -6,7 +6,28 @@ export async function GET() {
   const session = await getSession();
   if (session?.role !== "ADMIN") return NextResponse.json({ cards: [] });
   if (!isDbConfigured()) return NextResponse.json({ cards: [] });
-  const cards = await safeDbQuery(() => prisma.workspaceCard.findMany({ orderBy: { createdAt: "asc" } }), []);
+  const cards = await safeDbQuery(
+    () =>
+      prisma.workspaceCard.findMany({
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          icon: true,
+          iconColor: true,
+          titleColor: true,
+          summaryColor: true,
+          status: true,
+          tags: true,
+          userId: true,
+          createdAt: true,
+          updatedAt: true,
+          // Omit `content`
+        },
+        orderBy: { updatedAt: "desc" },
+      }),
+    []
+  );
   return NextResponse.json({ cards });
 }
 

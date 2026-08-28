@@ -1,42 +1,60 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
+// EDIT HERE: Set your personal GitHub profile URL
+const GITHUB_PROFILE_URL = "https://github.com/lh-exe";
+
 export default function Footer() {
-  const [utc, setUtc] = useState("");
+  const [dateTimeStr, setDateTimeStr] = useState<string>("");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const update = () => {
+    setMounted(true);
+    const updateDateTime = () => {
       const now = new Date();
-      setUtc(now.toISOString().replace("T", " ").slice(0, 19) + " UTC");
+      const formatted = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(now);
+
+      // Reformat standard US "MM/DD/YYYY, HH:mm:ss" -> "YYYY-MM-DD HH:mm:ss EST"
+      const parts = formatted.split(", ");
+      if (parts.length === 2) {
+        const [m, d, y] = parts[0].split("/");
+        setDateTimeStr(`${y}-${m}-${d} ${parts[1]} EST`);
+      } else {
+        setDateTimeStr(`${formatted} EST`);
+      }
     };
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
+
+    updateDateTime();
+    const interval = setInterval(updateDateTime, 1000);
+    return () => clearInterval(interval);
   }, []);
 
   return (
-    <footer className="bg-[#010305] border-t border-[#1e293b] py-6 px-6 sm:px-12 font-mono">
-      <div className="mx-auto max-w-[1400px] flex flex-col lg:flex-row items-center justify-between gap-4 text-xs">
+    <footer className="bg-[#010305] border-t border-[#1e293b] py-3.5 font-mono rounded-none">
+      <div className="flex items-center justify-between w-full max-w-[1400px] mx-auto px-4 sm:px-6">
+        <span className="tracking-[0.14em] text-white font-bold text-xs">HEXCENT v1.0 // PERSONAL PLATFORM</span>
         <div className="flex items-center gap-3">
-          <span className="tracking-[0.14em] text-white font-bold">HEXCENT v1.0 // PERSONAL PLATFORM</span>
-          <span className="flex items-center gap-1.5 border border-accent-green/20 bg-accent-green/10 px-2 py-0.5 text-[11px] tracking-widest text-accent-green">
-            <span className="h-1.5 w-1.5 bg-accent-green animate-pulse" /> [ALL SYSTEMS ONLINE]
+          <a
+            href={GITHUB_PROFILE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="border border-border-dark bg-dark-900 px-2.5 py-1 text-xs tracking-widest text-slate-400 hover:text-white hover:border-slate-600 rounded-none transition-colors"
+          >
+            GitHub
+          </a>
+          <span className="text-[11px] tracking-widest border border-border-dark bg-dark-900 px-2.5 py-1 text-slate-400 rounded-none min-w-[195px] text-center">
+            {mounted ? dateTimeStr : "----/--/-- --:--:-- EST"}
           </span>
-        </div>
-
-        <nav className="flex items-center gap-1 text-slate-500">
-          <Link href="/" className="border border-transparent px-2 py-1 hover:text-white hover:border-border-dark">[Overview]</Link>
-          <Link href="/about" className="border border-transparent px-2 py-1 hover:text-white hover:border-border-dark">[About]</Link>
-          <Link href="/projects" className="border border-transparent px-2 py-1 hover:text-white hover:border-border-dark">[Projects]</Link>
-          <Link href="/workspace" className="border border-transparent px-2 py-1 hover:text-white hover:border-border-dark">[Workspace]</Link>
-        </nav>
-
-        <div className="flex items-center gap-3 text-slate-600">
-          <a href="https://github.com" target="_blank" rel="noopener" className="border border-border-dark bg-dark-900 px-2 py-1 text-slate-400 hover:text-white">GITHUB</a>
-          <a href="mailto:hello@hexcent.dev" className="border border-border-dark bg-dark-900 px-2 py-1 text-slate-400 hover:text-white">EMAIL</a>
-          <span className="hidden sm:inline text-[11px] tracking-widest border border-border-dark bg-dark-900 px-2 py-1 text-slate-500">{utc}</span>
         </div>
       </div>
     </footer>

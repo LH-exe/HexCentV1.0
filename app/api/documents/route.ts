@@ -27,12 +27,12 @@ export async function GET(req: NextRequest) {
         select: {
           id: true,
           title: true,
-          content: true,
           icon: true,
           folderId: true,
           userId: true,
           createdAt: true,
           updatedAt: true,
+          // Omit `content` to shrink network payload by >90%
         },
       }),
     []
