@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma, { isDbConfigured } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { revalidatePath } from "next/cache";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -75,6 +76,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         });
       }
     }
+
+    // Invalidate Next.js router cache for both the gallery index and detail page
+    revalidatePath("/projects");
+    revalidatePath(`/projects/${updatedProject.slug}`);
+    revalidatePath(`/projects/${id}`);
 
     return NextResponse.json({ ok: true, project: updatedProject });
   } catch (err) {

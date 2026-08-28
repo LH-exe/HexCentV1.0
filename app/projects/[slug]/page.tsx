@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useDebouncedSave } from "@/lib/hooks/useDebouncedSave";
+import { useSaveStatusManager } from "@/lib/hooks/useSaveStatusMachine";
 import { ArrowLeft, Plus, Trash2, Copy, Check, LayoutGrid, Loader2, Cpu, Activity, Shield, Terminal, Database, Zap, Code, Folder, LineChart, FileText, Layers, Lock, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 
@@ -130,66 +131,58 @@ export default function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [draggedBlock, setDraggedBlock] = useState<string | null>(null);
 
-  // Fast metadata status (optimistic, 300ms micro-debounce)
-  const [metaStatus, setMetaStatus] = useState<"idle" | "syncing" | "saved" | "error">("idle");
-  const metaTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const { status: metaStatus, startSyncing: metaStartSyncing, setSaved: metaSetSaved, setError: metaSetError, setIdle: metaSetIdle } = useSaveStatusManager(2000);
+  const metaDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" }).then(r=>r.json()).then(d=> { if(d.role==="ADMIN") setIsAdmin(true); }).catch(()=>{});
   }, []);
 
-  // Fast save for metadata (Status, Icon, Colors, Description, Tags, Title) — decoupled from heavy block debounce
-  const saveMetadataImmediate = useCallback(
-    async (patchPayload: Partial<Project>) => {
+  // Real-time metadata save pipeline — immediate visual syncing, 400ms micro-debounce
+  const queueMetadataSave = useCallback(
+    (patchPayload: Record<string, any>) => {
       if (!project?.id && !slug) return;
       const targetId = project?.id || slug;
 
-      // Optimistic UI update
-      setProject((prev) => (prev ? { ...prev, ...patchPayload } : prev));
-      // Keep local states in sync for controlled inputs
+      // 1. Immediately indicate syncing state (atomic, clears saved timer)
+      metaStartSyncing();
+      // Optimistic local patch for instant UI
+      setProject((prev) => (prev ? ({ ...prev, ...patchPayload } as Project) : prev));
       if (patchPayload.status !== undefined) setStatus(String(patchPayload.status));
-      if (patchPayload.title !== undefined) setTitle(String(patchPayload.title));
-      if (patchPayload.description !== undefined) setDescription(String(patchPayload.description));
-      if (patchPayload.tags !== undefined) {
+      if (patchPayload.icon !== undefined) {
+        // icon handled via project optimistic above
+      }
+
+      // 2. Clear pending debounce timer
+      if (metaDebounceRef.current) clearTimeout(metaDebounceRef.current);
+
+      // 3. Queue network PATCH with 400ms micro-debounce
+      metaDebounceRef.current = setTimeout(async () => {
         try {
-          const arr = JSON.parse(String(patchPayload.tags));
-          if (Array.isArray(arr)) setTagsStr(arr.join(", "));
-        } catch {}
-      }
-
-      setMetaStatus("syncing");
-      try {
-        const res = await fetch(`/api/projects/${targetId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patchPayload),
-        });
-        if (!res.ok) throw new Error("Failed to save metadata");
-        const data = await res.json().catch(()=> ({}));
-        if (data.project) setProject(data.project);
-        else if (data.ok && data.project) setProject(data.project);
-        setMetaStatus("saved");
-        setTimeout(() => {
-          setMetaStatus((prev) => (prev === "saved" ? "idle" : prev));
-        }, 2000);
-      } catch (err) {
-        console.error("[saveMetadataImmediate] Failed:", err);
-        setMetaStatus("error");
-      }
+          const res = await fetch(`/api/projects/${targetId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patchPayload),
+          });
+          if (!res.ok) throw new Error("Metadata save failed");
+          const data = await res.json().catch(() => ({}));
+          const updated = data.project ?? null;
+          if (updated) setProject(updated);
+          metaSetSaved();
+        } catch (err) {
+          console.error("[queueMetadataSave] Error:", err);
+          metaSetError();
+        }
+      }, 400);
     },
-    [project?.id, slug]
+    [project?.id, slug, metaStartSyncing, metaSetSaved, metaSetError]
   );
 
-  // 300ms micro-debounce wrapper for text fields (title, description) to avoid per-keystroke flood
-  const debouncedMetaSave = useCallback(
-    (patch: Partial<Project>) => {
-      if (metaTimeoutRef.current) clearTimeout(metaTimeoutRef.current);
-      metaTimeoutRef.current = setTimeout(() => {
-        saveMetadataImmediate(patch);
-      }, 300);
-    },
-    [saveMetadataImmediate]
-  );
+  useEffect(() => {
+    return () => {
+      if (metaDebounceRef.current) clearTimeout(metaDebounceRef.current);
+    };
+  }, []);
 
   // Heavy content save — debounced 1500ms, only blocks (decoupled)
   const saveBlocks = useCallback(
@@ -208,7 +201,7 @@ export default function ProjectPage() {
 
   const { status: contentSaveStatus, resetBaseline: resetContentBaseline } = useDebouncedSave(blocks, saveBlocks, 1500, !!project && isAdmin);
 
-  // Combined display status: metadata fast + content heavy
+  // Combined display status: metadata fast + content heavy (atomic 2s hold via manager)
   const saveStatus: "idle" | "syncing" | "saved" | "error" =
     metaStatus === "syncing" || contentSaveStatus === "syncing"
       ? "syncing"
@@ -237,7 +230,7 @@ export default function ProjectPage() {
           const parsed = parseContent(found.content);
           setBlocks(parsed);
           resetContentBaseline(parsed);
-          setMetaStatus("idle");
+          metaSetIdle();
         } else {
           const r2 = await fetch(`/api/projects/${slug}`, { cache: "no-store" });
           if (r2.ok) {
@@ -251,7 +244,7 @@ export default function ProjectPage() {
               setBlocks(parsed);
               try { const t = JSON.parse(d2.project.tags); setTagsStr(Array.isArray(t) ? t.join(", ") : ""); } catch { setTagsStr(""); }
               resetContentBaseline(parsed);
-              setMetaStatus("idle");
+              metaSetIdle();
             }
           }
         }
@@ -263,7 +256,7 @@ export default function ProjectPage() {
     }
     load();
     return () => { isMounted = false; };
-  }, [slug, resetContentBaseline]);
+  }, [slug, resetContentBaseline, metaSetIdle]);
 
   function updateBlock(id: string, patch: Partial<Block>) { setBlocks(prev=> prev.map(b=> b.id===id ? { ...b, ...patch } as Block : b)); }
   function addBlock(type: Block["type"] = "paragraph") {
@@ -310,8 +303,12 @@ export default function ProjectPage() {
             ) : (
               <input
                 value={title}
-                onChange={e=> setTitle(e.target.value)}
-                onBlur={e=> saveMetadataImmediate({ title: e.target.value })}
+                onChange={e=> {
+                  const v = e.target.value;
+                  setTitle(v);
+                  queueMetadataSave({ title: v });
+                }}
+                placeholder="Enter project title..."
                 className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1"
               />
             )}
@@ -322,9 +319,9 @@ export default function ProjectPage() {
                 <select
                   value={status}
                   onChange={e=> {
-                    const newStatus = e.target.value;
-                    setStatus(newStatus);
-                    saveMetadataImmediate({ status: newStatus });
+                    const v = e.target.value;
+                    setStatus(v);
+                    queueMetadataSave({ status: v });
                   }}
                   className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
                 >
@@ -336,10 +333,11 @@ export default function ProjectPage() {
               ) : (
                 <input
                   value={tagsStr}
-                  onChange={e=> setTagsStr(e.target.value)}
-                  onBlur={e=> {
-                    const arr = e.target.value.split(",").map(s=>s.trim()).filter(Boolean);
-                    saveMetadataImmediate({ tags: JSON.stringify(arr) });
+                  onChange={e=> {
+                    const v = e.target.value;
+                    setTagsStr(v);
+                    const arr = v.split(",").map(s=>s.trim()).filter(Boolean);
+                    queueMetadataSave({ tags: JSON.stringify(arr) });
                   }}
                   placeholder="Tags comma separated"
                   className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white placeholder:text-slate-600"
@@ -352,19 +350,22 @@ export default function ProjectPage() {
               <>
                 <textarea
                   value={description}
-                  onChange={e=> setDescription(e.target.value)}
-                  onBlur={e=> saveMetadataImmediate({ description: e.target.value })}
+                  onChange={e=> {
+                    const v = e.target.value;
+                    setDescription(v);
+                    queueMetadataSave({ description: v });
+                  }}
+                  placeholder="Enter project summary..."
                   rows={2}
-                  placeholder="Description"
-                  className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300"
+                  className="w-full bg-dark-900 border border-border-dark px-3 py-2 text-slate-300 focus:border-cyan-400 text-xs"
                 />
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <select
                     value={project.icon}
                     onChange={e=> {
-                      const newIcon = e.target.value;
-                      setProject(prev=> prev ? { ...prev, icon: newIcon } : prev);
-                      saveMetadataImmediate({ icon: newIcon });
+                      const v = e.target.value;
+                      setProject(prev=> prev ? { ...prev, icon: v } : prev);
+                      queueMetadataSave({ icon: v });
                     }}
                     className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
                   >
@@ -372,8 +373,11 @@ export default function ProjectPage() {
                   </select>
                   <input
                     value={project.iconColor}
-                    onChange={e=> setProject(prev=> prev ? { ...prev, iconColor: e.target.value } : prev)}
-                    onBlur={e=> saveMetadataImmediate({ iconColor: e.target.value })}
+                    onChange={e=> {
+                      const v = e.target.value;
+                      setProject(prev=> prev ? { ...prev, iconColor: v } : prev);
+                      queueMetadataSave({ iconColor: v });
+                    }}
                     placeholder="linear-gradient(135deg, #00f0ff, #4338ca)"
                     className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
                   />

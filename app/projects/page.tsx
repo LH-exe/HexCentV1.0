@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Folder, Plus, Eye, EyeOff, Edit3, X, Save, Trash2, Cpu, Activity, Shield, Terminal, Database, Zap, Code, LineChart, FileText, Layers, Lock, type LucideIcon } from "lucide-react";
 
@@ -25,11 +26,16 @@ function RenderIcon({ name, className, style }: { name: string; className?: stri
 }
 
 export default function ProjectsIndex() {
+  const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Project & { dualColors: string }>>({});
+
+  useEffect(() => {
+    router.refresh();
+  }, [router]);
 
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" }).then(r=>r.json()).then(d=> { if(d.role==="ADMIN") setIsAdmin(true); }).catch(()=>{});

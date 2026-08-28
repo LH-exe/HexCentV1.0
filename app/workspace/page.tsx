@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useDebouncedSave } from "@/lib/hooks/useDebouncedSave";
+import { useSaveStatusManager } from "@/lib/hooks/useSaveStatusMachine";
 import { cn } from "@/lib/utils";
 import {
   Plus, Search, FileText, Trash2, Loader2, Check, AlertTriangle, FilePlus,
@@ -223,50 +224,48 @@ export default function WorkspacePage() {
   }, [selectedCard]);
   const { status: cardSaveStatus, resetBaseline: resetCardBaseline } = useDebouncedSave({ content: serialize(cardBlocks) }, saveCardContent as unknown as (v: { content: string })=>Promise<void>, 1500, !!selectedCard);
 
-  // Unified card metadata save — fast 300ms micro-debounce via immediate optimistic + status sync
-  const [galleryMetaStatus, setGalleryMetaStatus] = useState<"idle" | "syncing" | "saved" | "error">("idle");
-  const galleryMetaTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Unified gallery card metadata — real-time 400ms micro-debounce with atomic 2s saved hold
+  const { status: galleryMetaStatus, startSyncing: galleryStartSyncing, setSaved: gallerySetSaved, setError: gallerySetError } = useSaveStatusManager(2000);
+  const galleryDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const saveWorkspaceCardData = useCallback(
-    async (payload: Partial<WCard> & { content?: string }) => {
+  const queueGalleryMetaSave = useCallback(
+    (payload: Record<string, any>) => {
       if (!selectedCard?.id) return;
       const id = selectedCard.id;
-      setGalleryMetaStatus("syncing");
-      // Optimistic local update
+      galleryStartSyncing();
+      // Optimistic local update for instant UI
       setSelectedCard((prev) => (prev ? ({ ...prev, ...payload } as WCard) : prev));
       setCards((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...payload } as WCard) : c)));
-      try {
-        const res = await fetch(`/api/workspace-cards/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error("Failed to update workspace card");
-        const data = await res.json().catch(() => ({}));
-        const updated = data.card ?? data.workspaceCard ?? data.project ?? null;
-        if (updated) {
-          setSelectedCard((prev) => (prev ? ({ ...prev, ...updated } as WCard) : prev));
-          setCards((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...updated } as WCard) : c)));
+      if (galleryDebounceRef.current) clearTimeout(galleryDebounceRef.current);
+      galleryDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await fetch(`/api/workspace-cards/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error("Failed to update workspace card");
+          const data = await res.json().catch(() => ({}));
+          const updated = data.card ?? data.workspaceCard ?? null;
+          if (updated) {
+            setSelectedCard((prev) => (prev ? ({ ...prev, ...updated } as WCard) : prev));
+            setCards((prev) => prev.map((c) => (c.id === id ? ({ ...c, ...updated } as WCard) : c)));
+          }
+          gallerySetSaved();
+        } catch (err) {
+          console.error("[queueGalleryMetaSave] Error:", err);
+          gallerySetError();
         }
-        setGalleryMetaStatus("saved");
-        setTimeout(() => {
-          setGalleryMetaStatus((prev) => (prev === "saved" ? "idle" : prev));
-        }, 2000);
-      } catch (err) {
-        console.error("[saveWorkspaceCardData] Error:", err);
-        setGalleryMetaStatus("error");
-      }
+      }, 400);
     },
-    [selectedCard?.id]
+    [selectedCard?.id, galleryStartSyncing, gallerySetSaved, gallerySetError]
   );
 
-  const debouncedCardMetaSave = useCallback(
-    (payload: Partial<WCard> & { content?: string }) => {
-      if (galleryMetaTimeoutRef.current) clearTimeout(galleryMetaTimeoutRef.current);
-      galleryMetaTimeoutRef.current = setTimeout(() => saveWorkspaceCardData(payload), 300);
-    },
-    [saveWorkspaceCardData]
-  );
+  useEffect(() => {
+    return () => {
+      if (galleryDebounceRef.current) clearTimeout(galleryDebounceRef.current);
+    };
+  }, []);
 
   const galleryDisplayStatus: "idle" | "syncing" | "saved" | "error" =
     galleryMetaStatus === "syncing" || cardSaveStatus === "syncing"
@@ -913,8 +912,13 @@ export default function WorkspacePage() {
                       {galleryEditMode ? (
                         <input
                           value={selectedCard?.title ?? ""}
-                          onChange={e=> { if (!selectedCard) return; const v=e.target.value; setSelectedCard({ ...selectedCard, title: v }); }}
-                          onBlur={e=> saveWorkspaceCardData({ title: e.target.value })}
+                          onChange={e=> {
+                            const v = e.target.value;
+                            if (!selectedCard) return;
+                            setSelectedCard({ ...selectedCard, title: v });
+                            queueGalleryMetaSave({ title: v });
+                          }}
+                          placeholder="Enter card title..."
                           className="w-full bg-transparent text-xl font-bold text-white focus:outline-none border-b border-border-dark pb-1"
                         />
                       ) : (
@@ -929,7 +933,7 @@ export default function WorkspacePage() {
                               const v=e.target.value;
                               if (!selectedCard) return;
                               setSelectedCard({ ...selectedCard, status: v });
-                              saveWorkspaceCardData({ status: v });
+                              queueGalleryMetaSave({ status: v });
                             }}
                             className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
                           >
@@ -944,7 +948,7 @@ export default function WorkspacePage() {
                                 const v=e.target.value;
                                 if (!selectedCard) return;
                                 setSelectedCard({ ...selectedCard, icon: v });
-                                saveWorkspaceCardData({ icon: v });
+                                queueGalleryMetaSave({ icon: v });
                               }}
                               className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white"
                             >
@@ -952,8 +956,12 @@ export default function WorkspacePage() {
                             </select>
                             <input
                               value={selectedCard?.iconColor ?? ""}
-                              onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, iconColor: e.target.value }); }}
-                              onBlur={e=> saveWorkspaceCardData({ iconColor: e.target.value })}
+                              onChange={e=> {
+                                const v = e.target.value;
+                                if (!selectedCard) return;
+                                setSelectedCard({ ...selectedCard, iconColor: v });
+                                queueGalleryMetaSave({ iconColor: v });
+                              }}
                               placeholder="linear-gradient(135deg, #00f0ff, #4338ca)"
                               className="border border-border-dark bg-dark-900 px-2 py-1 text-xs text-white flex-1 min-w-[160px]"
                             />
@@ -965,11 +973,15 @@ export default function WorkspacePage() {
                       {galleryEditMode ? (
                         <textarea
                           value={selectedCard?.description ?? ""}
-                          onChange={e=> { if (!selectedCard) return; setSelectedCard({ ...selectedCard, description: e.target.value }); }}
-                          onBlur={e=> saveWorkspaceCardData({ description: e.target.value })}
+                          onChange={e=> {
+                            const v = e.target.value;
+                            if (!selectedCard) return;
+                            setSelectedCard({ ...selectedCard, description: v });
+                            queueGalleryMetaSave({ description: v });
+                          }}
                           rows={2}
-                          placeholder="Description"
-                          className="mt-3 w-full border border-border-dark bg-dark-900 p-2 text-xs text-slate-300"
+                          placeholder="Enter card summary..."
+                          className="w-full bg-dark-900 border border-border-dark px-3 py-2 text-slate-300 focus:border-cyan-400 text-xs"
                         />
                       ) : (
                         <p className="mt-3 text-sm leading-relaxed" style={{ color: selectedCard?.summaryColor ?? "#94a3b8" }}>{selectedCard?.description ?? ""}</p>

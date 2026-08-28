@@ -9,11 +9,13 @@ export async function GET(req: NextRequest) {
   if (!success) return NextResponse.json({ error: "Rate limited" }, { status: 429 });
   const session = await getSession();
   const isAdmin = session?.role === "ADMIN";
-  const headers = {
-    "Cache-Control": "public, s-maxage=120, stale-while-revalidate=600",
-    "CDN-Cache-Control": "public, s-maxage=120",
-    "Vercel-CDN-Cache-Control": "public, s-maxage=120",
-  };
+  const headers: Record<string, string> = isAdmin
+    ? { "Cache-Control": "no-store, max-age=0" }
+    : {
+        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+        "CDN-Cache-Control": "public, s-maxage=60",
+        "Vercel-CDN-Cache-Control": "public, s-maxage=60",
+      };
   if (!isDbConfigured()) {
     const fallback = [
       { id: "fallback_hexnet", slug: "hexnet", title: "Hexnet — Quantitative Research Framework", description: "Python / PyQt6 / Numba. Multi-threaded backtesting, walk-forward, triple-barrier, Monte Carlo.", icon: "Activity", iconColor: "linear-gradient(135deg, #00f0ff, #4338ca)", titleColor: "#ffffff", summaryColor: "#94a3b8", status: "In Development", tags: JSON.stringify(["Python","PyQt6","Numba"]), content: "[]", isPublic: true, order: 0 },
